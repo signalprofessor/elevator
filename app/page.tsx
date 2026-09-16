@@ -22,18 +22,46 @@ const metricColumns: { key: keyof Metrics; label: string; digits: number }[] = [
   { key: "brakeJerk", label: "Bromsjerk", digits: 2 },
 ];
 
+function interpolate(points: Point[], x: number) {
+  if (!points.length || x < points[0].x || x > points[points.length - 1].x) return null;
+  let lo = 0;
+  let hi = points.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].x <= x) lo = mid;
+    else hi = mid;
+  }
+  const left = points[lo];
+  const right = points[hi];
+  if (right.x === left.x) return left.y;
+  return left.y + (right.y - left.y) * ((x - left.x) / (right.x - left.x));
+}
+
 function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum" | "heightEnergy" | "spatialSpectrum"; xLabel: string; yLabel: string }) {
+  const series = useMemo(() => [
+    ...historical.map((elevator) => ({ key: `history:${elevator.id}`, name: `${elevator.id} historisk`, points: elevator[field], elevator, historical: true })),
+    ...elevators.map((elevator) => ({ key: `current:${elevator.id}`, name: elevator.id, points: elevator[field], elevator, historical: false })),
+  ], [elevators, historical, field]);
+  const chartData = useMemo(() => {
+    const populated = series.filter((item) => item.points.length);
+    if (!populated.length) return [];
+    const minX = Math.min(...populated.map((item) => item.points[0].x));
+    const maxX = Math.max(...populated.map((item) => item.points[item.points.length - 1].x));
+    return Array.from({ length: 321 }, (_, index) => {
+      const x = minX + (maxX - minX) * index / 320;
+      return Object.fromEntries([["x", x], ...populated.map((item) => [item.key, interpolate(item.points, x)])]);
+    });
+  }, [series]);
   return <section className="panel min-h-[330px]">
     <div className="mb-3"><h2>{title}</h2><p className="panel-note">{note}</p></div>
     <div className="h-[250px] w-full" aria-label={title}>
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 6 }}>
+        <LineChart data={chartData} margin={{ top: 6, right: 12, bottom: 18, left: 6 }}>
           <CartesianGrid stroke="#dbe5ea" strokeDasharray="2 4" />
           <XAxis dataKey="x" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: "#52636d" }} label={{ value: xLabel, position: "insideBottom", offset: -11, fontSize: 11 }} />
           <YAxis dataKey="y" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: "#52636d" }} width={52} label={{ value: yLabel, angle: -90, position: "insideLeft", fontSize: 11 }} />
-          <Tooltip formatter={(value) => [Number(value).toFixed(3), yLabel]} labelFormatter={(value) => `${xLabel}: ${Number(value).toFixed(2)}`} contentStyle={{ borderRadius: 10, borderColor: "#cbd8de", fontSize: 12 }} />
-          {historical.map((elevator) => <Line key={`history-${elevator.id}-${field}`} data={elevator[field]} dataKey="y" name={`${elevator.id} historisk`} stroke={colorFor(elevator.id)} strokeWidth={1.5} strokeDasharray="7 5" dot={false} isAnimationActive={false} opacity={0.7} />)}
-          {elevators.map((elevator) => <Line key={`${elevator.id}-${field}`} data={elevator[field]} dataKey="y" name={elevator.id} stroke={colorFor(elevator.id)} strokeWidth={2} dot={false} isAnimationActive={false} />)}
+          <Tooltip filterNull formatter={(value, name) => [Number(value).toFixed(3), String(name)]} labelFormatter={(value) => `${xLabel}: ${Number(value).toFixed(2)}`} contentStyle={{ borderRadius: 10, borderColor: "#cbd8de", fontSize: 12 }} />
+          {series.map((item) => <Line key={`${item.key}-${field}`} dataKey={item.key} name={item.name} stroke={colorFor(item.elevator.id)} strokeWidth={item.historical ? 1.5 : 2} strokeDasharray={item.historical ? "7 5" : undefined} dot={false} activeDot={{ r: 3 }} isAnimationActive={false} opacity={item.historical ? 0.7 : 1} connectNulls={false} />)}
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -71,8 +99,6 @@ export default function Home() {
   const historical = history?.elevators.filter((e) => selected.includes(e.id)) ?? [];
   const byId = current?.elevators ?? [];
   const strongest = [...byId].sort((a, b) => b.metrics.dominantAmplitude - a.metrics.dominantAmplitude).slice(0, 4);
-  const strongestSpatial = [...byId].sort((a, b) => b.metrics.dominantSpatialAmplitude - a.metrics.dominantSpatialAmplitude).slice(0, 4);
-  const strongestLocal = [...byId].sort((a, b) => b.metrics.peakLocalVibration - a.metrics.peakLocalVibration)[0];
   const shortest = [...byId].sort((a, b) => a.metrics.accelerationTime - b.metrics.accelerationTime)[0];
   const longest = [...byId].sort((a, b) => b.metrics.accelerationTime - a.metrics.accelerationTime)[0];
   if (!current) return <main className="grid min-h-screen place-items-center bg-slate-50">Laddar mätningen…</main>;
@@ -96,12 +122,12 @@ export default function Home() {
         <Plot title="Tidsnormaliserad acceleration" note="4C har en tydlig startimpuls; profilernas form visar olika acceleration- och jerkstrategier." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
         <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
         <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
-        <Plot title="Rumsligt vibrationsspektrum" note={`Tydligast: ${strongestSpatial.map((e) => `${e.id} ${e.metrics.dominantCyclesPerMeter.toFixed(1)} cykler/m`).join(", ")}. Perioden är avståndet mellan återkommande störningar.`} elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
-        <Plot title="Vibrationsenergi mot våningsläge" note={`${strongestLocal?.id} har högsta lokala nivån nära våning ${strongestLocal?.metrics.peakVibrationFloor.toFixed(1)}. En topp som återkommer på samma läge talar för gejd- eller skarvproblem.`} elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />
+        <Plot title="Rumsligt vibrationsspektrum" note="Flera hissar grupperar sig kring 5,6 cykler/m, vilket kan vara en gemensam mekanisk signatur. 10A avviker kring 8,1 cykler/m och har ett planerat hjulbyte." elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
+        <Plot title="Vibrationsenergi mot våningsläge" note="Baslinjemätningen visar inget tydligt gemensamt våningsberoende. Plotten visar hissarnas täckning; en lokal topp blir diagnostisk först om den återkommer vid samma läge." elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />
         {visible.length ? <MetricMatrix elevators={visible} /> : <section className="panel empty-selection"><p>Välj minst en hiss för att visa kurvor och nyckeltal.</p></section>}
       </div>
 
-      <section className="conclusions mt-5"><div><Gauge size={20} /><div><h2>Styrprofil och inställningar</h2><p>Profilerna skiljer sig tydligt mellan hissarna. Dokumentera regulatorparametrar och jämför accelerationstid, startimpuls och jerk efter varje justering.</p></div></div><div><Activity size={20} /><div><h2>Mekaniskt skick</h2><p>En stabil topp i cykler per meter pekar mot ett periodiskt, sträckbundet fel som hjul eller rulle. En lokal energitopp vid samma våningsläge i upprepade körningar pekar i stället mot gejd, skarv eller annan fast punkt i schaktet.</p></div></div></section>
+      <section className="conclusions mt-5"><div><Gauge size={20} /><div><h2>Styrprofil och inställningar</h2><p>Profilerna skiljer sig tydligt mellan hissarna. Dokumentera regulatorparametrar och jämför accelerationstid, startimpuls och jerk efter varje justering.</p></div></div><div><Activity size={20} /><div><h2>Mekaniskt skick</h2><p>Gruppen kring 5,6 cykler/m kan vara en gemensam konstruktionseffekt. 10A:s separata signatur kring 8,1 cykler/m är särskilt intressant att följa före och efter hjulbytet. Ett schaktbundet fel kräver däremot en energitopp som återkommer vid samma våningsläge.</p></div></div></section>
     </div>
   </main>;
 }
