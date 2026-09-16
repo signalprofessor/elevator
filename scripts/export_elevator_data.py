@@ -20,6 +20,49 @@ def downsample(x, y, points=360):
     return target.tolist(), np.interp(target, x, y).tolist()
 
 
+def spatial_diagnostics(ride):
+    """Map high-frequency ride vibration to shaft position and spatial frequency."""
+    raw = ride.vertical[ride.start : ride.stop + 1]
+    _, velocity = module.estimated_velocity(ride)
+    velocity = np.maximum(velocity, 0.0)
+    distance = np.r_[0.0, np.cumsum((velocity[:-1] + velocity[1:]) / (2 * ride.fs))]
+    total_distance = float(distance[-1])
+    if total_distance <= 0.5:
+        raise ValueError(f"Unusable distance estimate for {ride.name}")
+
+    # Isolate vibration from the low-frequency motion profile using zero-phase filters.
+    band = (
+        module.lowpass_zero_phase(raw, ride.fs, 25.0)
+        - module.lowpass_zero_phase(raw, ride.fs, 2.0)
+    )
+    local_rms = np.sqrt(np.maximum(0, module.movavg(band * band, 0.8 * ride.fs)))
+    floor_position = ride.top + (ride.bottom - ride.top) * distance / total_distance
+    moving = velocity >= max(0.25, 0.15 * float(np.max(velocity)))
+
+    # Uniform spatial sampling turns temporal oscillations into cycles per metre,
+    # including the acceleration and braking phases where speed is changing.
+    keep = np.r_[True, np.diff(distance) > 1e-5]
+    spatial_x = np.linspace(0.0, total_distance, max(512, min(2048, len(raw))))
+    spatial_vibration = np.interp(spatial_x, distance[keep], band[keep])
+    spatial_fs = 1.0 / float(np.median(np.diff(spatial_x)))
+    cycles_per_m, spatial_amplitude = module.spec(spatial_vibration, spatial_fs)
+    usable = (cycles_per_m >= 0.25) & (cycles_per_m <= min(20.0, 0.45 * spatial_fs))
+    peak_index = np.flatnonzero(usable)[np.argmax(spatial_amplitude[usable])]
+    peak_energy_index = np.flatnonzero(moving)[np.argmax(local_rms[moving])]
+    return {
+        "floor_position": floor_position[moving],
+        "local_rms": local_rms[moving],
+        "cycles_per_m": cycles_per_m[usable],
+        "spatial_amplitude": spatial_amplitude[usable],
+        "distance_m": total_distance,
+        "dominant_cpm": float(cycles_per_m[peak_index]),
+        "dominant_spatial_amplitude": float(spatial_amplitude[peak_index]),
+        "spatial_period_m": float(1.0 / cycles_per_m[peak_index]),
+        "peak_vibration_floor": float(floor_position[peak_energy_index]),
+        "peak_local_rms": float(local_rms[peak_energy_index]),
+    }
+
+
 rides, _ = module.load_rides(ROOT / "Elevator" / "data260913", ROOT / "Elevator" / "runs.csv")
 module.classify(rides)
 
@@ -37,12 +80,19 @@ for ride in rides:
     px, py = downsample(profile_x, filtered)
     vx, vy = downsample(velocity_t, velocity)
     fx, fy = downsample(frequency[keep], amplitude[keep], 280)
+    spatial = spatial_diagnostics(ride)
+    hx, hy = downsample(spatial["floor_position"][::-1], spatial["local_rms"][::-1])
+    sx, sy = downsample(spatial["cycles_per_m"], spatial["spatial_amplitude"], 280)
     payload["elevators"].append(
         {
             "id": ride.name,
+            "topFloor": ride.top,
+            "bottomFloor": ride.bottom,
             "profile": [{"x": round(x, 3), "y": round(y, 5)} for x, y in zip(px, py)],
             "velocity": [{"x": round(x, 3), "y": round(y, 5)} for x, y in zip(vx, vy)],
             "spectrum": [{"x": round(x, 4), "y": round(y, 6)} for x, y in zip(fx, fy)],
+            "heightEnergy": [{"x": round(x, 3), "y": round(y, 6)} for x, y in zip(hx, hy)],
+            "spatialSpectrum": [{"x": round(x, 4), "y": round(y, 6)} for x, y in zip(sx, sy)],
             "metrics": {
                 "accelerationTime": round(ride.metrics["accel_phase_s"], 2),
                 "startImpulse": round(ride.metrics["start_impulse_ms2"], 3),
@@ -52,6 +102,12 @@ for ride in rides:
                 "peakSpeed": round(ride.metrics["estimated_peak_speed_ms"], 3),
                 "dominantFrequency": round(ride.metrics["dominant_hz"], 2),
                 "dominantAmplitude": round(ride.metrics["dominant_amp_ms2"], 5),
+                "estimatedDistance": round(spatial["distance_m"], 2),
+                "dominantCyclesPerMeter": round(spatial["dominant_cpm"], 3),
+                "spatialPeriod": round(spatial["spatial_period_m"], 3),
+                "dominantSpatialAmplitude": round(spatial["dominant_spatial_amplitude"], 5),
+                "peakVibrationFloor": round(spatial["peak_vibration_floor"], 2),
+                "peakLocalVibration": round(spatial["peak_local_rms"], 4),
             },
         }
     )

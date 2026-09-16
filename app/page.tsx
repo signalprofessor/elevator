@@ -7,8 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 
 type Point = { x: number; y: number };
-type Metrics = { accelerationTime: number; startImpulse: number; startJerk: number; cruiseVibration: number; brakeJerk: number; peakSpeed: number; dominantFrequency: number; dominantAmplitude: number };
-type Elevator = { id: string; profile: Point[]; velocity: Point[]; spectrum: Point[]; metrics: Metrics };
+type Metrics = { accelerationTime: number; startImpulse: number; startJerk: number; cruiseVibration: number; brakeJerk: number; peakSpeed: number; dominantFrequency: number; dominantAmplitude: number; estimatedDistance: number; dominantCyclesPerMeter: number; spatialPeriod: number; dominantSpatialAmplitude: number; peakVibrationFloor: number; peakLocalVibration: number };
+type Elevator = { id: string; topFloor: number; bottomFloor: number; profile: Point[]; velocity: Point[]; spectrum: Point[]; heightEnergy: Point[]; spatialSpectrum: Point[]; metrics: Metrics };
 type Series = { date: string; label: string; elevators: Elevator[] };
 
 const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
@@ -22,7 +22,7 @@ const metricColumns: { key: keyof Metrics; label: string; digits: number }[] = [
   { key: "brakeJerk", label: "Bromsjerk", digits: 2 },
 ];
 
-function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum"; xLabel: string; yLabel: string }) {
+function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum" | "heightEnergy" | "spatialSpectrum"; xLabel: string; yLabel: string }) {
   return <section className="panel min-h-[330px]">
     <div className="mb-3"><h2>{title}</h2><p className="panel-note">{note}</p></div>
     <div className="h-[250px] w-full" aria-label={title}>
@@ -71,6 +71,8 @@ export default function Home() {
   const historical = history?.elevators.filter((e) => selected.includes(e.id)) ?? [];
   const byId = current?.elevators ?? [];
   const strongest = [...byId].sort((a, b) => b.metrics.dominantAmplitude - a.metrics.dominantAmplitude).slice(0, 4);
+  const strongestSpatial = [...byId].sort((a, b) => b.metrics.dominantSpatialAmplitude - a.metrics.dominantSpatialAmplitude).slice(0, 4);
+  const strongestLocal = [...byId].sort((a, b) => b.metrics.peakLocalVibration - a.metrics.peakLocalVibration)[0];
   const shortest = [...byId].sort((a, b) => a.metrics.accelerationTime - b.metrics.accelerationTime)[0];
   const longest = [...byId].sort((a, b) => b.metrics.accelerationTime - a.metrics.accelerationTime)[0];
   if (!current) return <main className="grid min-h-screen place-items-center bg-slate-50">Laddar mätningen…</main>;
@@ -92,12 +94,14 @@ export default function Home() {
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Plot title="Tidsnormaliserad acceleration" note="4C har en tydlig startimpuls; profilernas form visar olika acceleration- och jerkstrategier." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
-        <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
         <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
+        <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
+        <Plot title="Rumsligt vibrationsspektrum" note={`Tydligast: ${strongestSpatial.map((e) => `${e.id} ${e.metrics.dominantCyclesPerMeter.toFixed(1)} cykler/m`).join(", ")}. Perioden är avståndet mellan återkommande störningar.`} elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
+        <Plot title="Vibrationsenergi mot våningsläge" note={`${strongestLocal?.id} har högsta lokala nivån nära våning ${strongestLocal?.metrics.peakVibrationFloor.toFixed(1)}. En topp som återkommer på samma läge talar för gejd- eller skarvproblem.`} elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />
         {visible.length ? <MetricMatrix elevators={visible} /> : <section className="panel empty-selection"><p>Välj minst en hiss för att visa kurvor och nyckeltal.</p></section>}
       </div>
 
-      <section className="conclusions mt-5"><div><Gauge size={20} /><div><h2>Styrprofil och inställningar</h2><p>Profilerna skiljer sig tydligt mellan hissarna. Dokumentera regulatorparametrar och jämför accelerationstid, startimpuls och jerk efter varje justering.</p></div></div><div><Activity size={20} /><div><h2>Mekaniskt skick</h2><p>Periodiska spektraltoppar prioriterar kontroll av hjul, rullar, gejdrar, drivskiva och linspänning. Frekvensen ensam fastställer inte felorsaken.</p></div></div></section>
+      <section className="conclusions mt-5"><div><Gauge size={20} /><div><h2>Styrprofil och inställningar</h2><p>Profilerna skiljer sig tydligt mellan hissarna. Dokumentera regulatorparametrar och jämför accelerationstid, startimpuls och jerk efter varje justering.</p></div></div><div><Activity size={20} /><div><h2>Mekaniskt skick</h2><p>En stabil topp i cykler per meter pekar mot ett periodiskt, sträckbundet fel som hjul eller rulle. En lokal energitopp vid samma våningsläge i upprepade körningar pekar i stället mot gejd, skarv eller annan fast punkt i schaktet.</p></div></div></section>
     </div>
   </main>;
 }
