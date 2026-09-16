@@ -50,7 +50,7 @@ jobs:
           protocol: ftps
           port: 21
           local-dir: ./loopia-dist/
-          server-dir: ./
+          server-dir: ./public_html/
           security: strict
           log-level: minimal
           timeout: 120000
