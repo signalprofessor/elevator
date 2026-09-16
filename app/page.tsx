@@ -1,0 +1,103 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Activity, CalendarDays, Gauge, RotateCcw } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
+
+type Point = { x: number; y: number };
+type Metrics = { accelerationTime: number; startImpulse: number; startJerk: number; cruiseVibration: number; brakeJerk: number; peakSpeed: number; dominantFrequency: number; dominantAmplitude: number };
+type Elevator = { id: string; profile: Point[]; velocity: Point[]; spectrum: Point[]; metrics: Metrics };
+type Series = { date: string; label: string; elevators: Elevator[] };
+
+const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
+const ELEVATOR_IDS = ["10A", "10B", "10C", "10D", "10E", "6A", "4A", "4B", "4C", "4D", "4E"];
+const colorFor = (id: string) => COLORS[Math.max(0, ELEVATOR_IDS.indexOf(id)) % COLORS.length];
+const metricColumns: { key: keyof Metrics; label: string; digits: number }[] = [
+  { key: "accelerationTime", label: "Acc.tid s", digits: 1 },
+  { key: "startImpulse", label: "Startimpuls", digits: 2 },
+  { key: "startJerk", label: "Startjerk", digits: 2 },
+  { key: "cruiseVibration", label: "Färdvibration", digits: 3 },
+  { key: "brakeJerk", label: "Bromsjerk", digits: 2 },
+];
+
+function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum"; xLabel: string; yLabel: string }) {
+  return <section className="panel min-h-[330px]">
+    <div className="mb-3"><h2>{title}</h2><p className="panel-note">{note}</p></div>
+    <div className="h-[250px] w-full" aria-label={title}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 6 }}>
+          <CartesianGrid stroke="#dbe5ea" strokeDasharray="2 4" />
+          <XAxis dataKey="x" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: "#52636d" }} label={{ value: xLabel, position: "insideBottom", offset: -11, fontSize: 11 }} />
+          <YAxis dataKey="y" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: "#52636d" }} width={52} label={{ value: yLabel, angle: -90, position: "insideLeft", fontSize: 11 }} />
+          <Tooltip formatter={(value) => [Number(value).toFixed(3), yLabel]} labelFormatter={(value) => `${xLabel}: ${Number(value).toFixed(2)}`} contentStyle={{ borderRadius: 10, borderColor: "#cbd8de", fontSize: 12 }} />
+          {historical.map((elevator) => <Line key={`history-${elevator.id}-${field}`} data={elevator[field]} dataKey="y" name={`${elevator.id} historisk`} stroke={colorFor(elevator.id)} strokeWidth={1.5} strokeDasharray="7 5" dot={false} isAnimationActive={false} opacity={0.7} />)}
+          {elevators.map((elevator) => <Line key={`${elevator.id}-${field}`} data={elevator[field]} dataKey="y" name={elevator.id} stroke={colorFor(elevator.id)} strokeWidth={2} dot={false} isAnimationActive={false} />)}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  </section>;
+}
+
+function MetricMatrix({ elevators }: { elevators: Elevator[] }) {
+  const ranges = useMemo(() => Object.fromEntries(metricColumns.map(({ key }) => {
+    const values = elevators.map((e) => e.metrics[key]);
+    return [key, [Math.min(...values), Math.max(...values)]];
+  })) as Record<keyof Metrics, [number, number]>, [elevators]);
+  return <section className="panel overflow-x-auto">
+    <h2>Jämförande rörelseegenskaper</h2><p className="panel-note mb-4">Mörkare ton betyder högre värde inom den valda gruppen.</p>
+    <table className="metric-table"><thead><tr><th>Hiss</th>{metricColumns.map((m) => <th key={m.key}>{m.label}</th>)}</tr></thead><tbody>
+      {elevators.map((elevator) => <tr key={elevator.id}><th>{elevator.id}</th>{metricColumns.map(({ key, digits }) => {
+        const [min, max] = ranges[key]; const level = max === min ? 0 : (elevator.metrics[key] - min) / (max - min);
+        return <td key={key} style={{ backgroundColor: `color-mix(in srgb, #e85c3f ${14 + level * 66}%, #f5fafb)` }}>{elevator.metrics[key].toFixed(digits)}</td>;
+      })}</tr>)}
+    </tbody></table>
+  </section>;
+}
+
+export default function Home() {
+  const [current, setCurrent] = useState<Series | null>(null);
+  const [history, setHistory] = useState<Series | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [currentDate, setCurrentDate] = useState("2026-09-13");
+  const [comparisonDate, setComparisonDate] = useState("");
+  const [dateMessage, setDateMessage] = useState("");
+
+  useEffect(() => { fetch(`/data/${currentDate}.json`).then((r) => { if (!r.ok) throw new Error("Mätserien saknas"); return r.json(); }).then((data: Series) => { setCurrent(data); setDateMessage(""); setSelected((old) => old.length ? old : data.elevators.map((e) => e.id)); }).catch(() => setDateMessage(`Ingen mätserie finns för ${currentDate}. Senaste giltiga serie visas.`)); }, [currentDate]);
+  useEffect(() => { if (!comparisonDate) { setHistory(null); return; } fetch(`/data/${comparisonDate}.json`).then((r) => r.ok ? r.json() : Promise.reject()).then((data) => { setHistory(data); setDateMessage(""); }).catch(() => { setHistory(null); setDateMessage(`Ingen historisk mätserie finns för ${comparisonDate}.`); }); }, [comparisonDate]);
+
+  const visible = current?.elevators.filter((e) => selected.includes(e.id)) ?? [];
+  const historical = history?.elevators.filter((e) => selected.includes(e.id)) ?? [];
+  const byId = current?.elevators ?? [];
+  const strongest = [...byId].sort((a, b) => b.metrics.dominantAmplitude - a.metrics.dominantAmplitude).slice(0, 4);
+  const shortest = [...byId].sort((a, b) => a.metrics.accelerationTime - b.metrics.accelerationTime)[0];
+  const longest = [...byId].sort((a, b) => b.metrics.accelerationTime - a.metrics.accelerationTime)[0];
+  if (!current) return <main className="grid min-h-screen place-items-center bg-slate-50">Laddar mätningen…</main>;
+
+  const toggle = (id: string) => setSelected((value) => value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  const solo = (id: string) => setSelected((value) => value.length === 1 && value[0] === id ? byId.map((e) => e.id) : [id]);
+
+  return <main className="min-h-screen bg-[#eef4f6] text-slate-950">
+    <header className="border-b border-[#c8d7dd] bg-[#0c3444] text-white"><div className="mx-auto flex max-w-[1600px] flex-col gap-5 px-5 py-5 lg:flex-row lg:items-end lg:justify-between lg:px-8">
+      <div><div className="mb-2 flex items-center gap-2 text-sm text-cyan-100"><Activity size={17} /> BRF hissanalys</div><h1>Hissövervakning</h1><p className="mt-1 max-w-2xl text-sm text-slate-200">Jämför styrprofil och mekaniska vibrationssignaturer mellan hissar och mättillfällen.</p></div>
+      <div className="date-controls"><label><span>Aktuell mätning</span><input type="date" value={currentDate} onChange={(e) => setCurrentDate(e.target.value)} /></label><div className="line-key"><span className="solid-line" /> Heldragen</div><label><span>Historisk jämförelse</span><input type="date" value={comparisonDate} onChange={(e) => setComparisonDate(e.target.value)} /></label><div className="line-key"><span className="dashed-line" /> Streckad</div></div>
+    </div></header>
+
+    <div className="mx-auto max-w-[1600px] px-5 py-5 lg:px-8">
+      <section className="selector-bar" aria-label="Välj hissar"><div className="flex flex-wrap items-center gap-2"><span className="mr-2 text-sm font-semibold text-slate-700">Visa hissar</span>
+        {byId.map((elevator, index) => <div key={elevator.id} className={`elevator-toggle ${selected.includes(elevator.id) ? "selected" : ""}`}><Checkbox checked={selected.includes(elevator.id)} onCheckedChange={() => toggle(elevator.id)} aria-label={`Visa ${elevator.id}`} style={{ backgroundColor: selected.includes(elevator.id) ? COLORS[index] : undefined, borderColor: COLORS[index] }} /><button onClick={() => solo(elevator.id)} title={`Visa endast ${elevator.id}`}>{elevator.id}</button></div>)}
+      </div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelected(byId.map((e) => e.id))}>Alla</Button><Button variant="outline" size="sm" onClick={() => setSelected([])}>Ingen</Button><Button variant="ghost" size="sm" onClick={() => { setComparisonDate(""); setSelected(byId.map((e) => e.id)); }}><RotateCcw /> Återställ</Button></div></section>
+      <div className="history-hint"><CalendarDays size={16} /> {history ? `${history.date} visas streckad som jämförelse.` : dateMessage || "Ingen historisk mätserie finns ännu. Datumkontrollen aktiverar streckad jämförelse när nästa serie har exporterats."}</div>
+
+      <div className="mt-5 grid gap-5 xl:grid-cols-2">
+        <Plot title="Tidsnormaliserad acceleration" note="4C har en tydlig startimpuls; profilernas form visar olika acceleration- och jerkstrategier." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
+        <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
+        <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
+        {visible.length ? <MetricMatrix elevators={visible} /> : <section className="panel empty-selection"><p>Välj minst en hiss för att visa kurvor och nyckeltal.</p></section>}
+      </div>
+
+      <section className="conclusions mt-5"><div><Gauge size={20} /><div><h2>Styrprofil och inställningar</h2><p>Profilerna skiljer sig tydligt mellan hissarna. Dokumentera regulatorparametrar och jämför accelerationstid, startimpuls och jerk efter varje justering.</p></div></div><div><Activity size={20} /><div><h2>Mekaniskt skick</h2><p>Periodiska spektraltoppar prioriterar kontroll av hjul, rullar, gejdrar, drivskiva och linspänning. Frekvensen ensam fastställer inte felorsaken.</p></div></div></section>
+    </div>
+  </main>;
+}

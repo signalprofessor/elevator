@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+:root { --background:#eef4f6; --foreground:#10232d; --card:#fff; --card-foreground:#10232d; --popover:#fff; --popover-foreground:#10232d; --primary:#0b5d80; --primary-foreground:#fff; --secondary:#e1edf1; --secondary-foreground:#173b4a; --muted:#edf3f5; --muted-foreground:#60737d; --accent:#d7ebf2; --accent-foreground:#123b4c; --destructive:#b42318; --border:#cddce2; --input:#b7ccd5; --ring:#1594b8; --radius:.7rem; }
+@theme inline { --color-background:var(--background); --color-foreground:var(--foreground); --color-card:var(--card); --color-card-foreground:var(--card-foreground); --color-popover:var(--popover); --color-popover-foreground:var(--popover-foreground); --color-primary:var(--primary); --color-primary-foreground:var(--primary-foreground); --color-secondary:var(--secondary); --color-secondary-foreground:var(--secondary-foreground); --color-muted:var(--muted); --color-muted-foreground:var(--muted-foreground); --color-accent:var(--accent); --color-accent-foreground:var(--accent-foreground); --color-destructive:var(--destructive); --color-border:var(--border); --color-input:var(--input); --color-ring:var(--ring); --radius-sm:calc(var(--radius) - 4px); --radius-md:calc(var(--radius) - 2px); --radius-lg:var(--radius); --radius-xl:calc(var(--radius) + 4px); --font-sans:"Aptos","Segoe UI",Arial,sans-serif; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--background); color:var(--foreground); font-family:var(--font-sans); }
+h1 { font-size:clamp(1.55rem,3vw,2.35rem); font-weight:720; letter-spacing:-.035em; }
+h2 { font-size:1rem; font-weight:720; color:#153845; }
+.date-controls { display:flex; flex-wrap:wrap; align-items:end; gap:10px; }
+.date-controls label { display:grid; gap:4px; font-size:12px; color:#cfe6ee; }
+.date-controls input { min-height:38px; border:1px solid #477181; border-radius:8px; background:#f8fbfc; color:#183440; padding:6px 9px; font-size:14px; color-scheme:light; }
+.line-key { display:flex; align-items:center; gap:6px; padding-bottom:9px; color:#cfe6ee; font-size:12px; }
+.solid-line,.dashed-line { display:inline-block; width:22px; border-top:2px solid #65c6df; }
+.dashed-line { border-top-style:dashed; }
+.selector-bar { display:flex; align-items:center; justify-content:space-between; gap:18px; border:1px solid #cbdce2; border-radius:12px; background:#fff; padding:12px 14px; box-shadow:0 4px 18px rgb(20 57 70 / 5%); }
+.elevator-toggle { display:flex; align-items:center; gap:6px; border:1px solid transparent; border-radius:7px; padding:4px 7px; }
+.elevator-toggle.selected { background:#f2f7f9; border-color:#d6e4e9; }
+.elevator-toggle button { cursor:pointer; border:0; background:transparent; color:#253f4a; font-size:13px; font-weight:700; }
+.history-hint { display:flex; align-items:center; gap:8px; margin-top:12px; color:#667b84; font-size:13px; }
+.panel { border:1px solid #c9d9df; border-radius:13px; background:#fff; padding:16px 17px 12px; box-shadow:0 6px 24px rgb(20 57 70 / 6%); }
+.panel-note { margin-top:3px; color:#60737d; font-size:12.5px; line-height:1.4; }
+.metric-table { width:100%; border-collapse:separate; border-spacing:2px; font-size:12px; text-align:center; }
+.metric-table th { color:#48606b; font-size:11px; font-weight:700; white-space:nowrap; }
+.metric-table tbody th { padding-right:7px; text-align:right; color:#1a3b49; font-size:12px; }
+.metric-table td { min-width:58px; border-radius:3px; padding:5px 4px; color:#182e37; font-variant-numeric:tabular-nums; }
+.conclusions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.conclusions>div { display:flex; gap:12px; border-left:4px solid #16789b; border-radius:8px; background:#fff; padding:16px 18px; box-shadow:0 5px 20px rgb(20 57 70 / 5%); }
+.conclusions svg { flex:none; color:#16789b; }
+.conclusions p { margin-top:4px; color:#536a74; font-size:14px; line-height:1.5; }
+@media (max-width:900px) { .selector-bar { align-items:stretch; flex-direction:column; } .conclusions { grid-template-columns:1fr; } }
+@media (max-width:560px) { .date-controls { align-items:stretch; flex-direction:column; } .line-key { padding-bottom:0; } .panel { padding-inline:10px; } }
