@@ -39,8 +39,8 @@ function interpolate(points: Point[], x: number) {
 
 function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum" | "heightEnergy" | "spatialSpectrum"; xLabel: string; yLabel: string }) {
   const series = useMemo(() => [
-    ...historical.map((elevator) => ({ key: `history:${elevator.id}`, name: `${elevator.id} historisk`, points: elevator[field], elevator, historical: true })),
-    ...elevators.map((elevator) => ({ key: `current:${elevator.id}`, name: elevator.id, points: elevator[field], elevator, historical: false })),
+    ...historical.map((elevator, index) => ({ key: `history_${index}`, name: `${elevator.id} historisk`, points: elevator[field], elevator, historical: true })),
+    ...elevators.map((elevator, index) => ({ key: `current_${index}`, name: elevator.id, points: elevator[field], elevator, historical: false })),
   ], [elevators, historical, field]);
   const chartData = useMemo(() => {
     const populated = series.filter((item) => item.points.length);
@@ -59,7 +59,7 @@ function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { t
         <LineChart data={chartData} margin={{ top: 6, right: 12, bottom: 18, left: 6 }}>
           <CartesianGrid stroke="#dbe5ea" strokeDasharray="2 4" />
           <XAxis dataKey="x" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: "#52636d" }} label={{ value: xLabel, position: "insideBottom", offset: -11, fontSize: 11 }} />
-          <YAxis dataKey="y" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: "#52636d" }} width={52} label={{ value: yLabel, angle: -90, position: "insideLeft", fontSize: 11 }} />
+          <YAxis type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: "#52636d" }} width={52} label={{ value: yLabel, angle: -90, position: "insideLeft", fontSize: 11 }} />
           <Tooltip filterNull formatter={(value, name) => [Number(value).toFixed(3), String(name)]} labelFormatter={(value) => `${xLabel}: ${Number(value).toFixed(2)}`} contentStyle={{ borderRadius: 10, borderColor: "#cbd8de", fontSize: 12 }} />
           {series.map((item) => <Line key={`${item.key}-${field}`} dataKey={item.key} name={item.name} stroke={colorFor(item.elevator.id)} strokeWidth={item.historical ? 1.5 : 2} strokeDasharray={item.historical ? "7 5" : undefined} dot={false} activeDot={{ r: 3 }} isAnimationActive={false} opacity={item.historical ? 0.7 : 1} connectNulls={false} />)}
         </LineChart>
