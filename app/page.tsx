@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 
 type Point = { x: number; y: number };
 type Metrics = { accelerationTime: number; startImpulse: number; startJerk: number; cruiseVibration: number; brakeJerk: number; peakSpeed: number; dominantFrequency: number; dominantAmplitude: number; estimatedDistance: number; dominantCyclesPerMeter: number; spatialPeriod: number; dominantSpatialAmplitude: number; peakVibrationFloor: number; peakLocalVibration: number };
-type Elevator = { id: string; topFloor: number; bottomFloor: number; profile: Point[]; velocity: Point[]; spectrum: Point[]; heightEnergy: Point[]; spatialSpectrum: Point[]; metrics: Metrics };
-type Series = { date: string; label: string; elevators: Elevator[] };
+type Barometer = { sampleCount: number; startPressureHpa: number; endPressureHpa: number; pressureChangeHpa: number; relativeHeightChangeM: number };
+type Elevator = { id: string; topFloor: number; bottomFloor: number; profile: Point[]; velocity: Point[]; spectrum: Point[]; heightEnergy: Point[]; spatialSpectrum: Point[]; barometerHeight?: Point[]; barometer?: Barometer | null; metrics: Metrics };
+type Series = { date: string; label: string; status?: "complete" | "partial"; measuredElevators?: number; totalElevators?: number; missingElevators?: string[]; hasBarometer?: boolean; elevators: Elevator[] };
 
 const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
 const ELEVATOR_IDS = ["10A", "10B", "10C", "10D", "10E", "6A", "4A", "4B", "4C", "4D", "4E"];
@@ -37,10 +38,10 @@ function interpolate(points: Point[], x: number) {
   return left.y + (right.y - left.y) * ((x - left.x) / (right.x - left.x));
 }
 
-function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum" | "heightEnergy" | "spatialSpectrum"; xLabel: string; yLabel: string }) {
+function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum" | "heightEnergy" | "spatialSpectrum" | "barometerHeight"; xLabel: string; yLabel: string }) {
   const series = useMemo(() => [
-    ...historical.map((elevator, index) => ({ key: `history_${index}`, name: `${elevator.id} historisk`, points: elevator[field], elevator, historical: true })),
-    ...elevators.map((elevator, index) => ({ key: `current_${index}`, name: elevator.id, points: elevator[field], elevator, historical: false })),
+    ...historical.map((elevator, index) => ({ key: `history_${index}`, name: `${elevator.id} historisk`, points: elevator[field] ?? [], elevator, historical: true })),
+    ...elevators.map((elevator, index) => ({ key: `current_${index}`, name: elevator.id, points: elevator[field] ?? [], elevator, historical: false })),
   ], [elevators, historical, field]);
   const chartData = useMemo(() => {
     const populated = series.filter((item) => item.points.length);
@@ -88,12 +89,18 @@ export default function Home() {
   const [current, setCurrent] = useState<Series | null>(null);
   const [history, setHistory] = useState<Series | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
-  const [currentDate, setCurrentDate] = useState("2026-09-13");
-  const [comparisonDate, setComparisonDate] = useState("");
+  const [currentDate, setCurrentDate] = useState("2026-09-17");
+  const [comparisonDate, setComparisonDate] = useState("2026-09-13");
   const [dateMessage, setDateMessage] = useState("");
 
   useEffect(() => { fetch(`/data/${currentDate}.json`).then((r) => { if (!r.ok) throw new Error("Mätserien saknas"); return r.json(); }).then((data: Series) => { setCurrent(data); setDateMessage(""); setSelected((old) => old.length ? old : data.elevators.map((e) => e.id)); }).catch(() => setDateMessage(`Ingen mätserie finns för ${currentDate}. Senaste giltiga serie visas.`)); }, [currentDate]);
-  useEffect(() => { if (!comparisonDate) { setHistory(null); return; } fetch(`/data/${comparisonDate}.json`).then((r) => r.ok ? r.json() : Promise.reject()).then((data) => { setHistory(data); setDateMessage(""); }).catch(() => { setHistory(null); setDateMessage(`Ingen historisk mätserie finns för ${comparisonDate}.`); }); }, [comparisonDate]);
+  useEffect(() => {
+    if (!comparisonDate) {
+      Promise.resolve().then(() => setHistory(null));
+      return;
+    }
+    fetch(`/data/${comparisonDate}.json`).then((r) => r.ok ? r.json() : Promise.reject()).then((data) => { setHistory(data); setDateMessage(""); }).catch(() => { setHistory(null); setDateMessage(`Ingen historisk mätserie finns för ${comparisonDate}.`); });
+  }, [comparisonDate]);
 
   const visible = current?.elevators.filter((e) => selected.includes(e.id)) ?? [];
   const historical = history?.elevators.filter((e) => selected.includes(e.id)) ?? [];
@@ -114,16 +121,17 @@ export default function Home() {
 
     <div className="mx-auto max-w-[1600px] px-5 py-5 lg:px-8">
       <section className="selector-bar" aria-label="Välj hissar"><div className="flex flex-wrap items-center gap-2"><span className="mr-2 text-sm font-semibold text-slate-700">Visa hissar</span>
-        {byId.map((elevator, index) => <div key={elevator.id} className={`elevator-toggle ${selected.includes(elevator.id) ? "selected" : ""}`}><Checkbox checked={selected.includes(elevator.id)} onCheckedChange={() => toggle(elevator.id)} aria-label={`Visa ${elevator.id}`} style={{ backgroundColor: selected.includes(elevator.id) ? COLORS[index] : undefined, borderColor: COLORS[index] }} /><button onClick={() => solo(elevator.id)} title={`Visa endast ${elevator.id}`}>{elevator.id}</button></div>)}
+        {byId.map((elevator) => <div key={elevator.id} className={`elevator-toggle ${selected.includes(elevator.id) ? "selected" : ""}`}><Checkbox checked={selected.includes(elevator.id)} onCheckedChange={() => toggle(elevator.id)} aria-label={`Visa ${elevator.id}`} style={{ backgroundColor: selected.includes(elevator.id) ? colorFor(elevator.id) : undefined, borderColor: colorFor(elevator.id) }} /><button onClick={() => solo(elevator.id)} title={`Visa endast ${elevator.id}`}>{elevator.id}</button></div>)}
       </div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelected(byId.map((e) => e.id))}>Alla</Button><Button variant="outline" size="sm" onClick={() => setSelected([])}>Ingen</Button><Button variant="ghost" size="sm" onClick={() => { setComparisonDate(""); setSelected(byId.map((e) => e.id)); }}><RotateCcw /> Återställ</Button></div></section>
-      <div className="history-hint"><CalendarDays size={16} /> {history ? `${history.date} visas streckad som jämförelse.` : dateMessage || "Ingen historisk mätserie finns ännu. Datumkontrollen aktiverar streckad jämförelse när nästa serie har exporterats."}</div>
+      <div className="history-hint"><CalendarDays size={16} /><span>{current.status === "partial" && <>Partiell mätning: {current.measuredElevators || current.elevators.length} av {current.totalElevators || ELEVATOR_IDS.length} hissar. Saknas: {(current.missingElevators || []).join(", ")}. </>}{history ? history.date + " visas streckad som jämförelse." : dateMessage || "Ingen historisk jämförelse vald."}</span></div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
-        <Plot title="Tidsnormaliserad acceleration" note="4C har en tydlig startimpuls; profilernas form visar olika acceleration- och jerkstrategier." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
+        <Plot title="Tidsnormaliserad acceleration" note="Profilernas form visar skillnader i acceleration och jerk. Heldragen kurva är aktuell mätning; streckad är baslinjen." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
         <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
         <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
         <Plot title="Rumsligt vibrationsspektrum" note="Flera hissar grupperar sig kring 5,6 cykler/m, vilket kan vara en gemensam mekanisk signatur. 10A avviker kring 8,1 cykler/m och har ett planerat hjulbyte." elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
-        <Plot title="Vibrationsenergi mot våningsläge" note="Baslinjemätningen visar inget tydligt gemensamt våningsberoende. Plotten visar hissarnas täckning; en lokal topp blir diagnostisk först om den återkommer vid samma läge." elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />
+        <Plot title="Vibrationsenergi mot våningsläge" note="En lokal topp blir diagnostisk först om den återkommer vid samma läge i flera resor." elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />
+        <Plot title="Barometrisk höjdförändring" note="Ny försökskanal i mätningen 17 september. Relativ höjd är nollställd vid resans början; negativ riktning motsvarar färd nedåt." elevators={visible} historical={historical} field="barometerHeight" xLabel="sekunder" yLabel="relativ höjd m" />
         {visible.length ? <MetricMatrix elevators={visible} /> : <section className="panel empty-selection"><p>Välj minst en hiss för att visa kurvor och nyckeltal.</p></section>}
       </div>
 

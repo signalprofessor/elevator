@@ -1,1 +1,1 @@
-{"series": [{"date": "2026-09-13", "label": "Baslinjemätning"}]}
+{"series": [{"date": "2026-09-17", "label": "Uppföljning – partiell", "status": "partial", "measuredElevators": 6, "totalElevators": 11}, {"date": "2026-09-13", "label": "Baslinjemätning", "status": "complete", "measuredElevators": 11, "totalElevators": 11}]}
