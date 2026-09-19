@@ -7,19 +7,20 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 
 type Point = { x: number; y: number };
-type Metrics = { accelerationTime: number; startImpulse: number; startJerk: number; cruiseVibration: number; brakeJerk: number; peakSpeed: number; dominantFrequency: number; dominantAmplitude: number; estimatedDistance: number; dominantCyclesPerMeter: number; spatialPeriod: number; dominantSpatialAmplitude: number; peakVibrationFloor: number; peakLocalVibration: number };
+type Metrics = { accelerationTime: number; startImpulse: number; startJerk: number; startOscillation: number; cruiseVibration: number; brakeJerk: number; peakSpeed: number; dominantFrequency: number; dominantAmplitude: number; estimatedDistance: number; dominantCyclesPerMeter: number; spatialPeriod: number; dominantSpatialAmplitude: number; peakVibrationFloor: number; peakLocalVibration: number };
 type Barometer = { sampleCount: number; startPressureHpa: number; endPressureHpa: number; pressureChangeHpa: number; relativeHeightChangeM: number };
 type Elevator = { id: string; topFloor: number; bottomFloor: number; profile: Point[]; startProfile?: Point[]; stopProfile?: Point[]; velocity: Point[]; spectrum: Point[]; heightEnergy: Point[]; spatialSpectrum: Point[]; barometerHeight?: Point[]; barometer?: Barometer | null; metrics: Metrics };
 type Series = { date: string; label: string; status?: "complete" | "partial"; measuredElevators?: number; totalElevators?: number; missingElevators?: string[]; hasBarometer?: boolean; elevators: Elevator[] };
 
 const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
 const ELEVATOR_IDS = ["10A", "10B", "10C", "10D", "10E", "6A", "4A", "4B", "4C", "4D", "4E"];
-const DATA_VERSION = "20260919-2";
+const DATA_VERSION = "20260919-3";
 const colorFor = (id: string) => COLORS[Math.max(0, ELEVATOR_IDS.indexOf(id)) % COLORS.length];
 const metricColumns: { key: keyof Metrics; label: string; digits: number }[] = [
   { key: "accelerationTime", label: "Acc.tid s", digits: 1 },
   { key: "startImpulse", label: "Startimpuls", digits: 2 },
   { key: "startJerk", label: "Startjerk", digits: 2 },
+  { key: "startOscillation", label: "Startosc.", digits: 3 },
   { key: "cruiseVibration", label: "Färdvibration", digits: 3 },
   { key: "brakeJerk", label: "Bromsjerk", digits: 2 },
 ];
@@ -123,52 +124,64 @@ function median(values: number[]) {
 function ElevatorAssessments({ current, history, elevators }: { current: Series; history: Series | null; elevators: Elevator[] }) {
   const assessments = useMemo(() => {
     const previous = new Map(history?.elevators.map((elevator) => [elevator.id, elevator]) ?? []);
-    const medians = {
-      startImpulse: median(current.elevators.map((elevator) => elevator.metrics.startImpulse)),
-      startJerk: median(current.elevators.map((elevator) => elevator.metrics.startJerk)),
-      brakeJerk: median(current.elevators.map((elevator) => elevator.metrics.brakeJerk)),
-      vibration: median(current.elevators.map((elevator) => elevator.metrics.cruiseVibration)),
-    };
     return elevators.map((elevator) => {
       const old = previous.get(elevator.id);
-      const peers = current.elevators.filter((item) => item.id[0] === elevator.id[0] && item.id !== elevator.id);
-      const oldPeers = history?.elevators.filter((item) => item.id[0] === elevator.id[0] && item.id !== elevator.id) ?? [];
-      const peerDistance = peers.length ? peers.reduce((sum, peer) => sum + profileDistance(elevator.profile, peer.profile), 0) / peers.length : 0;
-      const oldPeerDistance = old && oldPeers.length ? oldPeers.reduce((sum, peer) => sum + profileDistance(old.profile, peer.profile), 0) / oldPeers.length : 0;
-      const issues: string[] = [];
-      if (elevator.metrics.startImpulse > Math.max(0.65, medians.startImpulse * 1.35)) issues.push("hög startimpuls");
-      if (elevator.metrics.startJerk > Math.max(0.55, medians.startJerk * 1.45)) issues.push("hög startjerk");
-      if (elevator.metrics.brakeJerk > Math.max(0.4, medians.brakeJerk * 1.45)) issues.push("hög bromsjerk");
-      if (elevator.metrics.cruiseVibration > Math.max(0.06, medians.vibration * 1.5)) issues.push("hög färdvibration");
+      const port = elevator.id.replace(/[A-Z]$/, "");
+      const group = current.elevators.filter((item) => item.id.replace(/[A-Z]$/, "") === port);
+      const oldGroup = history?.elevators.filter((item) => item.id.replace(/[A-Z]$/, "") === port) ?? [];
+      const groupMedian = {
+        accelerationTime: median(group.map((item) => item.metrics.accelerationTime)),
+        startImpulse: median(group.map((item) => item.metrics.startImpulse)),
+        startOscillation: median(group.map((item) => item.metrics.startOscillation ?? 0)),
+        brakeJerk: median(group.map((item) => item.metrics.brakeJerk)),
+        vibration: median(group.map((item) => item.metrics.cruiseVibration)),
+      };
+      const oldGroupMedian = oldGroup.length ? {
+        accelerationTime: median(oldGroup.map((item) => item.metrics.accelerationTime)),
+        vibration: median(oldGroup.map((item) => item.metrics.cruiseVibration)),
+      } : null;
+      const shortPowerfulProfile = group.length >= 3 && elevator.metrics.accelerationTime < groupMedian.accelerationTime * 0.82;
+      const profileMatchesTiming = group.length >= 3 && Math.abs(elevator.metrics.accelerationTime - groupMedian.accelerationTime) <= groupMedian.accelerationTime * 0.12;
+      const startShake = group.length >= 3 && elevator.metrics.startOscillation > Math.max(0.05, groupMedian.startOscillation * 1.5);
+      const startKick = group.length >= 3 && elevator.metrics.startImpulse > Math.max(0.9, groupMedian.startImpulse * 1.45);
+      const roughRide = group.length >= 3 && elevator.metrics.cruiseVibration > Math.max(0.055, groupMedian.vibration * 1.5);
+      const roughStop = group.length >= 3 && elevator.metrics.brakeJerk > Math.max(0.5, groupMedian.brakeJerk * 1.5);
+      const issues = [startShake && "skakning vid start", startKick && "kraftig startimpuls", roughRide && "hög färdvibration", roughStop && "avvikande bromsjerk"].filter(Boolean) as string[];
       const profileChange = old ? profileDistance(elevator.profile, old.profile) : 0;
-      const changed = profileChange > 0.045;
-      const status = issues.length ? "Följ upp" : changed ? "Förändrad profil" : "Liknar gruppen";
-      const now = issues.length ? `Nu avviker ${issues.join(", ")}.` : "Nu ligger start, stopp och färdvibration nära gruppens centrala nivåer.";
-      const relative = peers.length ? (peerDistance < 0.055 ? "Styrprofilen ligger nära hissarna i samma portgrupp." : "Styrprofilen skiljer sig från flera hissar i samma portgrupp.") : "Gruppjämförelsen är begränsad.";
-      let change = "Ingen historisk jämförelse är vald.";
+      const accelerationChange = old ? percentChange(elevator.metrics.accelerationTime, old.metrics.accelerationTime) : 0;
+      const vibrationChange = old ? percentChange(elevator.metrics.cruiseVibration, old.metrics.cruiseVibration) : 0;
+      const stopChange = old ? percentChange(elevator.metrics.brakeJerk, old.metrics.brakeJerk) : 0;
+      const status = issues.length ? "Följ upp" : profileChange > 0.045 ? "Förändrad profil" : "Liknar gruppen";
+      let currentText = "Start, färd och stopp ligger nära portgruppens centrala nivåer.";
+      if (issues.length) currentText = `Nu avviker ${issues.join(", ")}.`;
+      let profileText = "Styrprofilen kan inte jämföras med en större portgrupp.";
+      if (shortPowerfulProfile) profileText = "Styrprofilen är kortare och kraftigare än övriga i portgruppen.";
+      else if (profileMatchesTiming) profileText = "Styrprofilens accelerationstid överensstämmer med portgruppen.";
+      else if (group.length >= 3) profileText = "Styrprofilens accelerationstid avviker från portgruppen.";
+      let changeText = "Ingen historisk jämförelse är vald.";
       if (old) {
         const changes: string[] = [];
-        if (changed) changes.push("styrprofilen har förändrats tydligt");
+        if (Math.abs(accelerationChange) >= 20 && profileMatchesTiming) changes.push("styrprofilen har justerats och ansluter nu till portgruppens accelerationstid");
         else if (profileChange < 0.02) changes.push("styrprofilen är väl reproducerad");
+        else if (profileChange > 0.045) changes.push("styrprofilen har förändrats tydligt");
         else changes.push("styrprofilen har förändrats måttligt");
-        if (oldPeerDistance > 0 && peerDistance < oldPeerDistance * 0.8) changes.push("den ansluter nu bättre till portgruppen");
-        const startChange = percentChange(elevator.metrics.startImpulse, old.metrics.startImpulse);
-        const stopChange = percentChange(elevator.metrics.brakeJerk, old.metrics.brakeJerk);
-        if (Math.abs(startChange) >= 25) changes.push(`startimpulsen är ${Math.abs(startChange)} % ${startChange > 0 ? "högre" : "lägre"}`);
-        if (Math.abs(stopChange) >= 30) changes.push(`bromsjerken är ${Math.abs(stopChange)} % ${stopChange > 0 ? "högre" : "lägre"}`);
-        change = `Sedan ${history?.date}: ${changes.join("; ")}.`;
+        if (roughRide && vibrationChange >= 20 && oldGroupMedian && elevator.metrics.cruiseVibration > oldGroupMedian.vibration) changes.push(`färdvibrationen har ökat ${vibrationChange} % och avviker mer än tidigare`);
+        else if (roughRide) changes.push("färdvibrationen är hög relativt portgruppen");
+        if (startShake) changes.push("startoscillationen är hög relativt portgruppen");
+        if (roughStop && Math.abs(stopChange) >= 30 && Math.abs(elevator.metrics.brakeJerk - old.metrics.brakeJerk) >= 0.12) changes.push(`bromsjerken har ${stopChange > 0 ? "ökat" : "minskat"} ${Math.abs(stopChange)} %`);
+        changeText = `Sedan ${history?.date}: ${changes.join("; ")}.`;
       }
-      return { id: elevator.id, status, now, relative, change };
+      return { id: elevator.id, status, currentText, profileText, changeText };
     });
   }, [current, history, elevators]);
 
   return <section className="panel">
     <h2>Bedömning per hiss</h2>
-    <p className="panel-note mb-4">Automatisk relativ screening. Välj färre hissar ovan för en kortare lista.</p>
+    <p className="panel-note mb-4">Automatisk relativ screening inom respektive portgrupp. Välj färre hissar ovan för en kortare lista.</p>
     <div className="divide-y divide-slate-200">
       {assessments.map((item) => <article key={item.id} className="py-3 first:pt-0 last:pb-0">
         <div className="mb-1 flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{item.id}</h3><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{item.status}</span></div>
-        <p className="text-sm leading-6 text-slate-700">{item.now} {item.relative} {item.change}</p>
+        <p className="text-sm leading-6 text-slate-700">{item.profileText} {item.currentText} {item.changeText}</p>
       </article>)}
     </div>
   </section>;
@@ -218,7 +231,7 @@ export default function Home() {
         <Plot title="Tidsnormaliserad acceleration" note="Profilernas form visar skillnader i acceleration och jerk. Heldragen kurva är aktuell mätning; streckad är baslinjen." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
         <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
         <Plot title="Startförlopp" note="Acceleration lågpassfiltrerad vid 5 Hz, lokalt nollställd och justerad så att detekterad start ligger vid 0 s. Korta toppar kan motsvara ett upplevt tillhopp." elevators={visible} historical={historical} field="startProfile" xLabel="sekunder från start" yLabel="m/s²" />
-        <Plot title="Stoppförlopp" note="Detekterad inbromsning ligger vid 0 s. En mjuk, sammanhängande kurva är jämnare än flera snabba riktningsbyten eller en kort topp." elevators={visible} historical={historical} field="stopProfile" xLabel="sekunder från inbromsning" yLabel="m/s²" />
+        <Plot title="Stoppförlopp" note="Detekterad bromsstart ligger vid 0 s; hela inbromsningen och återgången mot noll visas. En mjuk kurva är jämnare än flera snabba riktningsbyten eller en kort topp." elevators={visible} historical={historical} field="stopProfile" xLabel="sekunder från inbromsning" yLabel="m/s²" />
         <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
         <Plot title="Rumsligt vibrationsspektrum" note="Flera hissar grupperar sig kring 5,6 cykler/m, vilket kan vara en gemensam mekanisk signatur. 10A avviker kring 8,1 cykler/m och har ett planerat hjulbyte." elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
         <Plot title="Vibrationsenergi mot våningsläge" note="En lokal topp blir diagnostisk först om den återkommer vid samma läge i flera resor." elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />

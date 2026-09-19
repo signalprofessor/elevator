@@ -30,7 +30,7 @@ def event_profile(ride, phase):
     else:
         search_lo = max(ride.start, ride.stop - int(6.0 * ride.fs))
         search_hi = min(len(signal), ride.stop + 1)
-        before_s, after_s = 4.0, 1.25
+        before_s, after_s = 1.5, 5.0
     search = np.abs(signal[search_lo:search_hi])
     peak = search_lo + int(np.argmax(search))
     threshold = max(0.04, 0.12 * float(search.max()))
@@ -50,6 +50,22 @@ def event_profile(ride, phase):
     if len(seconds) > 320:
         seconds, values = map(np.asarray, downsample(seconds, values, 320))
     return [{"x": round(float(x), 3), "y": round(float(y), 5)} for x, y in zip(seconds, values)]
+
+
+def start_oscillation_rms(points):
+    """High-frequency RMS during the first 1.5 s after detected start."""
+    x = np.asarray([point["x"] for point in points])
+    y = np.asarray([point["y"] for point in points])
+    keep = (x >= -0.1) & (x <= 1.5)
+    x, y = x[keep], y[keep]
+    if len(y) < 8:
+        return 0.0
+    fs = 1.0 / float(np.median(np.diff(x)))
+    window = max(3, int(0.35 * fs))
+    trend = module.movavg(y, window)
+    edge = window // 2
+    residual = y[edge:-edge] - trend[edge:-edge] if edge else y - trend
+    return float(np.sqrt(np.mean(residual * residual)))
 
 
 def spatial_diagnostics(ride):
@@ -133,6 +149,7 @@ for ride in rides:
                 "accelerationTime": round(ride.metrics["accel_phase_s"], 2),
                 "startImpulse": round(ride.metrics["start_impulse_ms2"], 3),
                 "startJerk": round(ride.metrics["start_jerk_rms_ms3"], 3),
+                "startOscillation": round(start_oscillation_rms(start_profile), 4),
                 "cruiseVibration": round(ride.metrics["cruise_vibration_rms_ms2"], 4),
                 "brakeJerk": round(ride.metrics["brake_jerk_rms_ms3"], 3),
                 "peakSpeed": round(ride.metrics["estimated_peak_speed_ms"], 3),
