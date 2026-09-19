@@ -95,10 +95,10 @@ def spatial_diagnostics(ride):
 
 
 data_dir = ROOT / "Elevator" / "data260917"
-floors = {"10A": (8, 2), "10B": (6, 1), "10C": (7, 2), "10D": (8, 2), "10E": (6, 1), "6A": (7, 1)}
+floors = {"10A": (8, 2), "10B": (6, 1), "10C": (7, 2), "10D": (8, 2), "10E": (6, 1), "6A": (7, 1), "4A": (8, 2), "4B": (6, 1), "4C": (7, 2), "4D": (8, 2), "4E": (6, 1)}
 rides = []
 for i, path in enumerate(sorted(p for p in data_dir.iterdir() if p.is_file() and not p.name.startswith(".")), 1):
-    match = re.search(r"(10[A-E]|6A)$", path.name)
+    match = re.search(r"(10[A-E]|6A|4[A-E])$", path.name)
     if not match:
         continue
     name = match.group(1)
@@ -110,7 +110,7 @@ for i, path in enumerate(sorted(p for p in data_dir.iterdir() if p.is_file() and
     rides.append(ride)
 module.classify(rides)
 
-payload = {"date": "2026-09-17", "label": "Uppföljning – partiell", "status": "partial", "measuredElevators": 6, "totalElevators": 11, "missingElevators": ["4A", "4B", "4C", "4D", "4E"], "hasBarometer": True, "elevators": []}
+payload = {"date": "2026-09-17", "label": "Uppföljningsmätning 17–18 sep", "status": "complete", "measuredElevators": 11, "totalElevators": 11, "missingElevators": [], "hasBarometer": True, "elevators": []}
 for ride in rides:
     segment = ride.vertical[ride.start : ride.stop + 1]
     filtered = module.lowpass_zero_phase(segment, ride.fs, 1.0)
@@ -131,6 +131,7 @@ for ride in rides:
     payload["elevators"].append(
         {
             "id": ride.name,
+            "recordedAt": f"{ride.path.name[4:8]}-{ride.path.name[8:10]}-{ride.path.name[10:12]}T{ride.path.name[13:15]}:{ride.path.name[15:17]}:{ride.path.name[17:19]}",
             "topFloor": ride.top,
             "bottomFloor": ride.bottom,
             "profile": [{"x": round(x, 3), "y": round(y, 5)} for x, y in zip(px, py)],
@@ -162,5 +163,5 @@ for ride in rides:
 out = Path(__file__).resolve().parents[1] / "public" / "data"
 out.mkdir(parents=True, exist_ok=True)
 (out / "2026-09-17.json").write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-(out / "index.json").write_text(json.dumps({"series": [{"date": "2026-09-17", "label": "Uppföljning – partiell", "status": "partial", "measuredElevators": 6, "totalElevators": 11}, {"date": "2026-09-13", "label": "Baslinjemätning", "status": "complete", "measuredElevators": 11, "totalElevators": 11}]}, ensure_ascii=False))
+(out / "index.json").write_text(json.dumps({"series": [{"date": "2026-09-17", "label": "Uppföljningsmätning 17–18 sep", "status": "complete", "measuredElevators": 11, "totalElevators": 11}, {"date": "2026-09-13", "label": "Baslinjemätning", "status": "complete", "measuredElevators": 11, "totalElevators": 11}]}, ensure_ascii=False))
 print(out / "2026-09-17.json")
