@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Activity, CalendarDays, Gauge, RotateCcw } from "lucide-react";
+import { Activity, CalendarDays, RotateCcw } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 
@@ -14,6 +14,7 @@ type Series = { date: string; label: string; status?: "complete" | "partial"; me
 
 const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
 const ELEVATOR_IDS = ["10A", "10B", "10C", "10D", "10E", "6A", "4A", "4B", "4C", "4D", "4E"];
+const DATA_VERSION = "20260919-2";
 const colorFor = (id: string) => COLORS[Math.max(0, ELEVATOR_IDS.indexOf(id)) % COLORS.length];
 const metricColumns: { key: keyof Metrics; label: string; digits: number }[] = [
   { key: "accelerationTime", label: "Acc.tid s", digits: 1 },
@@ -108,52 +109,67 @@ function profileDistance(left: Point[], right: Point[]) {
   return Math.sqrt(squared.reduce((sum, value) => sum + value, 0) / squared.length);
 }
 
-function groupDispersion(elevators: Elevator[]) {
-  const distances: number[] = [];
-  for (let i = 0; i < elevators.length; i += 1) {
-    for (let j = i + 1; j < elevators.length; j += 1) distances.push(profileDistance(elevators[i].profile, elevators[j].profile));
-  }
-  return distances.length ? distances.reduce((sum, value) => sum + value, 0) / distances.length : 0;
-}
-
 function percentChange(current: number, previous: number) {
   return previous ? Math.round(100 * (current - previous) / previous) : 0;
 }
 
-function ComparisonSummary({ current, history }: { current: Series; history: Series }) {
-  const summary = useMemo(() => {
-    const previous = new Map(history.elevators.map((elevator) => [elevator.id, elevator]));
-    const matched = current.elevators.filter((elevator) => previous.has(elevator.id));
-    const profileChanges = matched.map((elevator) => ({ id: elevator.id, distance: profileDistance(elevator.profile, previous.get(elevator.id)!.profile) })).sort((a, b) => b.distance - a.distance);
-    const starts = matched.map((elevator) => {
-      const old = previous.get(elevator.id)!;
-      const score = Math.abs(Math.log((elevator.metrics.startImpulse + 0.02) / (old.metrics.startImpulse + 0.02))) + Math.abs(Math.log((elevator.metrics.startJerk + 0.02) / (old.metrics.startJerk + 0.02)));
-      return { id: elevator.id, score, impulse: percentChange(elevator.metrics.startImpulse, old.metrics.startImpulse), jerk: percentChange(elevator.metrics.startJerk, old.metrics.startJerk) };
-    }).sort((a, b) => b.score - a.score);
-    const stops = matched.map((elevator) => {
-      const old = previous.get(elevator.id)!;
-      return { id: elevator.id, score: Math.abs(Math.log((elevator.metrics.brakeJerk + 0.02) / (old.metrics.brakeJerk + 0.02))), jerk: percentChange(elevator.metrics.brakeJerk, old.metrics.brakeJerk) };
-    }).sort((a, b) => b.score - a.score);
-    const groups = ["4", "10"].map((prefix) => {
-      const now = matched.filter((elevator) => elevator.id.startsWith(prefix));
-      const then = now.map((elevator) => previous.get(elevator.id)!).filter(Boolean);
-      const currentSpread = groupDispersion(now);
-      const historicSpread = groupDispersion(then);
-      return { prefix, count: now.length, currentSpread, historicSpread, change: historicSpread ? percentChange(currentSpread, historicSpread) : 0 };
-    }).filter((group) => group.count >= 3 && group.historicSpread > 0).sort((a, b) => a.change - b.change);
-    return { matched, profileChanges, starts, stops, bestGroup: groups[0] };
-  }, [current, history]);
+function median(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
 
-  if (!summary.matched.length) return null;
-  const group = summary.bestGroup;
-  const groupChanges = group ? summary.profileChanges.filter((item) => item.id.startsWith(group.prefix)).slice(0, 2) : summary.profileChanges.slice(0, 2);
-  return <section className="panel mt-5">
-    <h2>Automatisk jämförelse med {history.date}</h2>
-    <p className="panel-note mb-3">Databaserad screening av profilform och nyckeltal. Texten anger förändringar, inte säkerställda orsaker.</p>
-    <div className="grid gap-3 md:grid-cols-3">
-      <div><h3 className="font-semibold text-slate-800">Styrprofil</h3><p>{summary.matched.length} hissar kan jämföras. {group && group.change < -10 ? `Profilerna i port ${group.prefix} är mer homogena; spridningen har minskat ${Math.abs(group.change)} %. ` : "Ingen tydlig minskning av gruppspridningen kan fastställas. "}Störst profilförändring i gruppen: {groupChanges.map((item) => item.id).join(" och ")}.</p></div>
-      <div><h3 className="font-semibold text-slate-800">Start</h3><p>{summary.starts.slice(0, 2).map((item) => `${item.id}: startimpuls ${item.impulse >= 0 ? "+" : ""}${item.impulse} %, startjerk ${item.jerk >= 0 ? "+" : ""}${item.jerk} %`).join(". ")}.</p></div>
-      <div><h3 className="font-semibold text-slate-800">Stopp</h3><p>Störst förändring i bromsjerk: {summary.stops.slice(0, 2).map((item) => `${item.id} ${item.jerk >= 0 ? "+" : ""}${item.jerk} %`).join(" och ")}. Granska stoppkurvorna för att skilja en jämn förändring från ett kort ryck.</p></div>
+function ElevatorAssessments({ current, history, elevators }: { current: Series; history: Series | null; elevators: Elevator[] }) {
+  const assessments = useMemo(() => {
+    const previous = new Map(history?.elevators.map((elevator) => [elevator.id, elevator]) ?? []);
+    const medians = {
+      startImpulse: median(current.elevators.map((elevator) => elevator.metrics.startImpulse)),
+      startJerk: median(current.elevators.map((elevator) => elevator.metrics.startJerk)),
+      brakeJerk: median(current.elevators.map((elevator) => elevator.metrics.brakeJerk)),
+      vibration: median(current.elevators.map((elevator) => elevator.metrics.cruiseVibration)),
+    };
+    return elevators.map((elevator) => {
+      const old = previous.get(elevator.id);
+      const peers = current.elevators.filter((item) => item.id[0] === elevator.id[0] && item.id !== elevator.id);
+      const oldPeers = history?.elevators.filter((item) => item.id[0] === elevator.id[0] && item.id !== elevator.id) ?? [];
+      const peerDistance = peers.length ? peers.reduce((sum, peer) => sum + profileDistance(elevator.profile, peer.profile), 0) / peers.length : 0;
+      const oldPeerDistance = old && oldPeers.length ? oldPeers.reduce((sum, peer) => sum + profileDistance(old.profile, peer.profile), 0) / oldPeers.length : 0;
+      const issues: string[] = [];
+      if (elevator.metrics.startImpulse > Math.max(0.65, medians.startImpulse * 1.35)) issues.push("hög startimpuls");
+      if (elevator.metrics.startJerk > Math.max(0.55, medians.startJerk * 1.45)) issues.push("hög startjerk");
+      if (elevator.metrics.brakeJerk > Math.max(0.4, medians.brakeJerk * 1.45)) issues.push("hög bromsjerk");
+      if (elevator.metrics.cruiseVibration > Math.max(0.06, medians.vibration * 1.5)) issues.push("hög färdvibration");
+      const profileChange = old ? profileDistance(elevator.profile, old.profile) : 0;
+      const changed = profileChange > 0.045;
+      const status = issues.length ? "Följ upp" : changed ? "Förändrad profil" : "Liknar gruppen";
+      const now = issues.length ? `Nu avviker ${issues.join(", ")}.` : "Nu ligger start, stopp och färdvibration nära gruppens centrala nivåer.";
+      const relative = peers.length ? (peerDistance < 0.055 ? "Styrprofilen ligger nära hissarna i samma portgrupp." : "Styrprofilen skiljer sig från flera hissar i samma portgrupp.") : "Gruppjämförelsen är begränsad.";
+      let change = "Ingen historisk jämförelse är vald.";
+      if (old) {
+        const changes: string[] = [];
+        if (changed) changes.push("styrprofilen har förändrats tydligt");
+        else if (profileChange < 0.02) changes.push("styrprofilen är väl reproducerad");
+        else changes.push("styrprofilen har förändrats måttligt");
+        if (oldPeerDistance > 0 && peerDistance < oldPeerDistance * 0.8) changes.push("den ansluter nu bättre till portgruppen");
+        const startChange = percentChange(elevator.metrics.startImpulse, old.metrics.startImpulse);
+        const stopChange = percentChange(elevator.metrics.brakeJerk, old.metrics.brakeJerk);
+        if (Math.abs(startChange) >= 25) changes.push(`startimpulsen är ${Math.abs(startChange)} % ${startChange > 0 ? "högre" : "lägre"}`);
+        if (Math.abs(stopChange) >= 30) changes.push(`bromsjerken är ${Math.abs(stopChange)} % ${stopChange > 0 ? "högre" : "lägre"}`);
+        change = `Sedan ${history?.date}: ${changes.join("; ")}.`;
+      }
+      return { id: elevator.id, status, now, relative, change };
+    });
+  }, [current, history, elevators]);
+
+  return <section className="panel">
+    <h2>Bedömning per hiss</h2>
+    <p className="panel-note mb-4">Automatisk relativ screening. Välj färre hissar ovan för en kortare lista.</p>
+    <div className="divide-y divide-slate-200">
+      {assessments.map((item) => <article key={item.id} className="py-3 first:pt-0 last:pb-0">
+        <div className="mb-1 flex flex-wrap items-center gap-2"><h3 className="font-bold text-slate-900">{item.id}</h3><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{item.status}</span></div>
+        <p className="text-sm leading-6 text-slate-700">{item.now} {item.relative} {item.change}</p>
+      </article>)}
     </div>
   </section>;
 }
@@ -166,13 +182,13 @@ export default function Home() {
   const [comparisonDate, setComparisonDate] = useState("2026-09-13");
   const [dateMessage, setDateMessage] = useState("");
 
-  useEffect(() => { fetch(`/data/${currentDate}.json`).then((r) => { if (!r.ok) throw new Error("Mätserien saknas"); return r.json(); }).then((data: Series) => { setCurrent(data); setDateMessage(""); setSelected((old) => old.length ? old : data.elevators.map((e) => e.id)); }).catch(() => setDateMessage(`Ingen mätserie finns för ${currentDate}. Senaste giltiga serie visas.`)); }, [currentDate]);
+  useEffect(() => { fetch(`/data/${currentDate}.json?v=${DATA_VERSION}`).then((r) => { if (!r.ok) throw new Error("Mätserien saknas"); return r.json(); }).then((data: Series) => { setCurrent(data); setDateMessage(""); setSelected((old) => old.length ? old : data.elevators.map((e) => e.id)); }).catch(() => setDateMessage(`Ingen mätserie finns för ${currentDate}. Senaste giltiga serie visas.`)); }, [currentDate]);
   useEffect(() => {
     if (!comparisonDate) {
       Promise.resolve().then(() => setHistory(null));
       return;
     }
-    fetch(`/data/${comparisonDate}.json`).then((r) => r.ok ? r.json() : Promise.reject()).then((data) => { setHistory(data); setDateMessage(""); }).catch(() => { setHistory(null); setDateMessage(`Ingen historisk mätserie finns för ${comparisonDate}.`); });
+    fetch(`/data/${comparisonDate}.json?v=${DATA_VERSION}`).then((r) => r.ok ? r.json() : Promise.reject()).then((data) => { setHistory(data); setDateMessage(""); }).catch(() => { setHistory(null); setDateMessage(`Ingen historisk mätserie finns för ${comparisonDate}.`); });
   }, [comparisonDate]);
 
   const visible = current?.elevators.filter((e) => selected.includes(e.id)) ?? [];
@@ -198,21 +214,21 @@ export default function Home() {
       </div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelected(byId.map((e) => e.id))}>Alla</Button><Button variant="outline" size="sm" onClick={() => setSelected([])}>Ingen</Button><Button variant="ghost" size="sm" onClick={() => { setComparisonDate(""); setSelected(byId.map((e) => e.id)); }}><RotateCcw /> Återställ</Button></div></section>
       <div className="history-hint"><CalendarDays size={16} /><span>{current.status === "partial" && <>Partiell mätning: {current.measuredElevators || current.elevators.length} av {current.totalElevators || ELEVATOR_IDS.length} hissar. Saknas: {(current.missingElevators || []).join(", ")}. </>}{history ? history.date + " visas streckad som jämförelse." : dateMessage || "Ingen historisk jämförelse vald."}</span></div>
 
-      {history && <ComparisonSummary current={current} history={history} />}
-
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Plot title="Tidsnormaliserad acceleration" note="Profilernas form visar skillnader i acceleration och jerk. Heldragen kurva är aktuell mätning; streckad är baslinjen." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
+        <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
         <Plot title="Startförlopp" note="Acceleration lågpassfiltrerad vid 5 Hz, lokalt nollställd och justerad så att detekterad start ligger vid 0 s. Korta toppar kan motsvara ett upplevt tillhopp." elevators={visible} historical={historical} field="startProfile" xLabel="sekunder från start" yLabel="m/s²" />
         <Plot title="Stoppförlopp" note="Detekterad inbromsning ligger vid 0 s. En mjuk, sammanhängande kurva är jämnare än flera snabba riktningsbyten eller en kort topp." elevators={visible} historical={historical} field="stopProfile" xLabel="sekunder från inbromsning" yLabel="m/s²" />
-        <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
         <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
         <Plot title="Rumsligt vibrationsspektrum" note="Flera hissar grupperar sig kring 5,6 cykler/m, vilket kan vara en gemensam mekanisk signatur. 10A avviker kring 8,1 cykler/m och har ett planerat hjulbyte." elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
         <Plot title="Vibrationsenergi mot våningsläge" note="En lokal topp blir diagnostisk först om den återkommer vid samma läge i flera resor." elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />
         <Plot title="Barometrisk höjdförändring" note="Ny försökskanal i mätningen 17 september. Relativ höjd är nollställd vid resans början; negativ riktning motsvarar färd nedåt." elevators={visible} historical={historical} field="barometerHeight" xLabel="sekunder" yLabel="relativ höjd m" />
-        {visible.length ? <MetricMatrix elevators={visible} /> : <section className="panel empty-selection"><p>Välj minst en hiss för att visa kurvor och nyckeltal.</p></section>}
       </div>
 
-      <section className="conclusions mt-5"><div><Gauge size={20} /><div><h2>Styrprofil och inställningar</h2><p>Profilerna skiljer sig tydligt mellan hissarna. Dokumentera regulatorparametrar och jämför accelerationstid, startimpuls och jerk efter varje justering.</p></div></div><div><Activity size={20} /><div><h2>Mekaniskt skick</h2><p>Gruppen kring 5,6 cykler/m kan vara en gemensam konstruktionseffekt. 10A:s separata signatur kring 8,1 cykler/m är särskilt intressant att följa före och efter hjulbytet. Ett schaktbundet fel kräver däremot en energitopp som återkommer vid samma våningsläge.</p></div></div></section>
+      <section className="mt-5 grid items-start gap-5 xl:grid-cols-2">
+        {visible.length ? <MetricMatrix elevators={visible} /> : <section className="panel empty-selection"><p>Välj minst en hiss för att visa nyckeltal och bedömningar.</p></section>}
+        {visible.length ? <ElevatorAssessments current={current} history={history} elevators={visible} /> : null}
+      </section>
     </div>
   </main>;
 }
