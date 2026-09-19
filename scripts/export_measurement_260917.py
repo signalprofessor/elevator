@@ -51,6 +51,38 @@ def barometer_diagnostics(ride):
     return points, metadata
 
 
+def event_profile(ride, phase):
+    """Locally zeroed, event-aligned acceleration around start or stop."""
+    signal = module.lowpass_zero_phase(ride.vertical, ride.fs, 5.0)
+    if phase == "start":
+        search_lo = ride.start
+        search_hi = min(len(signal), ride.start + int(6.0 * ride.fs))
+        before_s, after_s = 1.25, 4.0
+    else:
+        search_lo = max(ride.start, ride.stop - int(6.0 * ride.fs))
+        search_hi = min(len(signal), ride.stop + 1)
+        before_s, after_s = 4.0, 1.25
+    search = np.abs(signal[search_lo:search_hi])
+    peak = search_lo + int(np.argmax(search))
+    threshold = max(0.04, 0.12 * float(search.max()))
+    event = peak
+    while event > search_lo and abs(signal[event - 1]) > threshold:
+        event -= 1
+    if phase == "start":
+        candidates = np.flatnonzero(search > threshold)
+        if len(candidates):
+            event = search_lo + int(candidates[0])
+    lo = max(0, event - int(before_s * ride.fs))
+    hi = min(len(signal), event + int(after_s * ride.fs) + 1)
+    baseline_hi = max(lo + 1, event - int(0.25 * ride.fs))
+    baseline = float(np.median(signal[lo:baseline_hi]))
+    seconds = (np.arange(lo, hi) - event) / ride.fs
+    values = signal[lo:hi] - baseline
+    if len(seconds) > 320:
+        seconds, values = map(np.asarray, downsample(seconds, values, 320))
+    return [{"x": round(float(x), 3), "y": round(float(y), 5)} for x, y in zip(seconds, values)]
+
+
 def spatial_diagnostics(ride):
     """Map high-frequency ride vibration to shaft position and spatial frequency."""
     raw = ride.vertical[ride.start : ride.stop + 1]
@@ -125,6 +157,8 @@ for ride in rides:
     vx, vy = downsample(velocity_t, velocity)
     fx, fy = downsample(frequency[keep], amplitude[keep], 280)
     spatial = spatial_diagnostics(ride)
+    start_profile = event_profile(ride, "start")
+    stop_profile = event_profile(ride, "stop")
     barometer_height, barometer = barometer_diagnostics(ride)
     hx, hy = downsample(spatial["floor_position"][::-1], spatial["local_rms"][::-1])
     sx, sy = downsample(spatial["cycles_per_m"], spatial["spatial_amplitude"], 280)
@@ -135,6 +169,8 @@ for ride in rides:
             "topFloor": ride.top,
             "bottomFloor": ride.bottom,
             "profile": [{"x": round(x, 3), "y": round(y, 5)} for x, y in zip(px, py)],
+            "startProfile": start_profile,
+            "stopProfile": stop_profile,
             "velocity": [{"x": round(x, 3), "y": round(y, 5)} for x, y in zip(vx, vy)],
             "spectrum": [{"x": round(x, 4), "y": round(y, 6)} for x, y in zip(fx, fy)],
             "heightEnergy": [{"x": round(x, 3), "y": round(y, 6)} for x, y in zip(hx, hy)],

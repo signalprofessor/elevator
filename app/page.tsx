@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 type Point = { x: number; y: number };
 type Metrics = { accelerationTime: number; startImpulse: number; startJerk: number; cruiseVibration: number; brakeJerk: number; peakSpeed: number; dominantFrequency: number; dominantAmplitude: number; estimatedDistance: number; dominantCyclesPerMeter: number; spatialPeriod: number; dominantSpatialAmplitude: number; peakVibrationFloor: number; peakLocalVibration: number };
 type Barometer = { sampleCount: number; startPressureHpa: number; endPressureHpa: number; pressureChangeHpa: number; relativeHeightChangeM: number };
-type Elevator = { id: string; topFloor: number; bottomFloor: number; profile: Point[]; velocity: Point[]; spectrum: Point[]; heightEnergy: Point[]; spatialSpectrum: Point[]; barometerHeight?: Point[]; barometer?: Barometer | null; metrics: Metrics };
+type Elevator = { id: string; topFloor: number; bottomFloor: number; profile: Point[]; startProfile?: Point[]; stopProfile?: Point[]; velocity: Point[]; spectrum: Point[]; heightEnergy: Point[]; spatialSpectrum: Point[]; barometerHeight?: Point[]; barometer?: Barometer | null; metrics: Metrics };
 type Series = { date: string; label: string; status?: "complete" | "partial"; measuredElevators?: number; totalElevators?: number; missingElevators?: string[]; hasBarometer?: boolean; elevators: Elevator[] };
 
 const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
@@ -38,7 +38,7 @@ function interpolate(points: Point[], x: number) {
   return left.y + (right.y - left.y) * ((x - left.x) / (right.x - left.x));
 }
 
-function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "velocity" | "spectrum" | "heightEnergy" | "spatialSpectrum" | "barometerHeight"; xLabel: string; yLabel: string }) {
+function Plot({ title, note, elevators, historical, field, xLabel, yLabel }: { title: string; note: string; elevators: Elevator[]; historical: Elevator[]; field: "profile" | "startProfile" | "stopProfile" | "velocity" | "spectrum" | "heightEnergy" | "spatialSpectrum" | "barometerHeight"; xLabel: string; yLabel: string }) {
   const series = useMemo(() => [
     ...historical.map((elevator, index) => ({ key: `history_${index}`, name: `${elevator.id} historisk`, points: elevator[field] ?? [], elevator, historical: true })),
     ...elevators.map((elevator, index) => ({ key: `current_${index}`, name: elevator.id, points: elevator[field] ?? [], elevator, historical: false })),
@@ -85,6 +85,79 @@ function MetricMatrix({ elevators }: { elevators: Elevator[] }) {
   </section>;
 }
 
+function centeredProfile(points: Point[]) {
+  if (!points.length) return points;
+  const edge = Math.max(1, Math.floor(points.length * 0.06));
+  const baselinePoints = [...points.slice(0, edge), ...points.slice(-edge)];
+  const baseline = baselinePoints.reduce((sum, point) => sum + point.y, 0) / baselinePoints.length;
+  return points.map((point) => ({ x: point.x, y: point.y - baseline }));
+}
+
+function profileDistance(left: Point[], right: Point[]) {
+  const a = centeredProfile(left);
+  const b = centeredProfile(right);
+  if (!a.length || !b.length) return 0;
+  const start = Math.max(a[0].x, b[0].x);
+  const stop = Math.min(a[a.length - 1].x, b[b.length - 1].x);
+  if (stop <= start) return 0;
+  const squared = Array.from({ length: 121 }, (_, index) => {
+    const x = start + (stop - start) * index / 120;
+    const delta = (interpolate(a, x) ?? 0) - (interpolate(b, x) ?? 0);
+    return delta * delta;
+  });
+  return Math.sqrt(squared.reduce((sum, value) => sum + value, 0) / squared.length);
+}
+
+function groupDispersion(elevators: Elevator[]) {
+  const distances: number[] = [];
+  for (let i = 0; i < elevators.length; i += 1) {
+    for (let j = i + 1; j < elevators.length; j += 1) distances.push(profileDistance(elevators[i].profile, elevators[j].profile));
+  }
+  return distances.length ? distances.reduce((sum, value) => sum + value, 0) / distances.length : 0;
+}
+
+function percentChange(current: number, previous: number) {
+  return previous ? Math.round(100 * (current - previous) / previous) : 0;
+}
+
+function ComparisonSummary({ current, history }: { current: Series; history: Series }) {
+  const summary = useMemo(() => {
+    const previous = new Map(history.elevators.map((elevator) => [elevator.id, elevator]));
+    const matched = current.elevators.filter((elevator) => previous.has(elevator.id));
+    const profileChanges = matched.map((elevator) => ({ id: elevator.id, distance: profileDistance(elevator.profile, previous.get(elevator.id)!.profile) })).sort((a, b) => b.distance - a.distance);
+    const starts = matched.map((elevator) => {
+      const old = previous.get(elevator.id)!;
+      const score = Math.abs(Math.log((elevator.metrics.startImpulse + 0.02) / (old.metrics.startImpulse + 0.02))) + Math.abs(Math.log((elevator.metrics.startJerk + 0.02) / (old.metrics.startJerk + 0.02)));
+      return { id: elevator.id, score, impulse: percentChange(elevator.metrics.startImpulse, old.metrics.startImpulse), jerk: percentChange(elevator.metrics.startJerk, old.metrics.startJerk) };
+    }).sort((a, b) => b.score - a.score);
+    const stops = matched.map((elevator) => {
+      const old = previous.get(elevator.id)!;
+      return { id: elevator.id, score: Math.abs(Math.log((elevator.metrics.brakeJerk + 0.02) / (old.metrics.brakeJerk + 0.02))), jerk: percentChange(elevator.metrics.brakeJerk, old.metrics.brakeJerk) };
+    }).sort((a, b) => b.score - a.score);
+    const groups = ["4", "10"].map((prefix) => {
+      const now = matched.filter((elevator) => elevator.id.startsWith(prefix));
+      const then = now.map((elevator) => previous.get(elevator.id)!).filter(Boolean);
+      const currentSpread = groupDispersion(now);
+      const historicSpread = groupDispersion(then);
+      return { prefix, count: now.length, currentSpread, historicSpread, change: historicSpread ? percentChange(currentSpread, historicSpread) : 0 };
+    }).filter((group) => group.count >= 3 && group.historicSpread > 0).sort((a, b) => a.change - b.change);
+    return { matched, profileChanges, starts, stops, bestGroup: groups[0] };
+  }, [current, history]);
+
+  if (!summary.matched.length) return null;
+  const group = summary.bestGroup;
+  const groupChanges = group ? summary.profileChanges.filter((item) => item.id.startsWith(group.prefix)).slice(0, 2) : summary.profileChanges.slice(0, 2);
+  return <section className="panel mt-5">
+    <h2>Automatisk jämförelse med {history.date}</h2>
+    <p className="panel-note mb-3">Databaserad screening av profilform och nyckeltal. Texten anger förändringar, inte säkerställda orsaker.</p>
+    <div className="grid gap-3 md:grid-cols-3">
+      <div><h3 className="font-semibold text-slate-800">Styrprofil</h3><p>{summary.matched.length} hissar kan jämföras. {group && group.change < -10 ? `Profilerna i port ${group.prefix} är mer homogena; spridningen har minskat ${Math.abs(group.change)} %. ` : "Ingen tydlig minskning av gruppspridningen kan fastställas. "}Störst profilförändring i gruppen: {groupChanges.map((item) => item.id).join(" och ")}.</p></div>
+      <div><h3 className="font-semibold text-slate-800">Start</h3><p>{summary.starts.slice(0, 2).map((item) => `${item.id}: startimpuls ${item.impulse >= 0 ? "+" : ""}${item.impulse} %, startjerk ${item.jerk >= 0 ? "+" : ""}${item.jerk} %`).join(". ")}.</p></div>
+      <div><h3 className="font-semibold text-slate-800">Stopp</h3><p>Störst förändring i bromsjerk: {summary.stops.slice(0, 2).map((item) => `${item.id} ${item.jerk >= 0 ? "+" : ""}${item.jerk} %`).join(" och ")}. Granska stoppkurvorna för att skilja en jämn förändring från ett kort ryck.</p></div>
+    </div>
+  </section>;
+}
+
 export default function Home() {
   const [current, setCurrent] = useState<Series | null>(null);
   const [history, setHistory] = useState<Series | null>(null);
@@ -125,8 +198,12 @@ export default function Home() {
       </div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelected(byId.map((e) => e.id))}>Alla</Button><Button variant="outline" size="sm" onClick={() => setSelected([])}>Ingen</Button><Button variant="ghost" size="sm" onClick={() => { setComparisonDate(""); setSelected(byId.map((e) => e.id)); }}><RotateCcw /> Återställ</Button></div></section>
       <div className="history-hint"><CalendarDays size={16} /><span>{current.status === "partial" && <>Partiell mätning: {current.measuredElevators || current.elevators.length} av {current.totalElevators || ELEVATOR_IDS.length} hissar. Saknas: {(current.missingElevators || []).join(", ")}. </>}{history ? history.date + " visas streckad som jämförelse." : dateMessage || "Ingen historisk jämförelse vald."}</span></div>
 
+      {history && <ComparisonSummary current={current} history={history} />}
+
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Plot title="Tidsnormaliserad acceleration" note="Profilernas form visar skillnader i acceleration och jerk. Heldragen kurva är aktuell mätning; streckad är baslinjen." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
+        <Plot title="Startförlopp" note="Acceleration lågpassfiltrerad vid 5 Hz, lokalt nollställd och justerad så att detekterad start ligger vid 0 s. Korta toppar kan motsvara ett upplevt tillhopp." elevators={visible} historical={historical} field="startProfile" xLabel="sekunder från start" yLabel="m/s²" />
+        <Plot title="Stoppförlopp" note="Detekterad inbromsning ligger vid 0 s. En mjuk, sammanhängande kurva är jämnare än flera snabba riktningsbyten eller en kort topp." elevators={visible} historical={historical} field="stopProfile" xLabel="sekunder från inbromsning" yLabel="m/s²" />
         <Plot title="Skattad driftkorrigerad hastighet" note={`${shortest?.id} har kortast accelerationsfas (${shortest?.metrics.accelerationTime.toFixed(1)} s); ${longest?.id} har längst (${longest?.metrics.accelerationTime.toFixed(1)} s).`} elevators={visible} historical={historical} field="velocity" xLabel="sekunder" yLabel="m/s" />
         <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
         <Plot title="Rumsligt vibrationsspektrum" note="Flera hissar grupperar sig kring 5,6 cykler/m, vilket kan vara en gemensam mekanisk signatur. 10A avviker kring 8,1 cykler/m och har ett planerat hjulbyte." elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
