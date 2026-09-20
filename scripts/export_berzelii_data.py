@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +19,36 @@ spec.loader.exec_module(module)
 def downsample(x, y, points=360):
     target = np.linspace(float(x[0]), float(x[-1]), points)
     return target.tolist(), np.interp(target, x, y).tolist()
+
+
+def barometer_diagnostics(ride):
+    """Return relative barometric height during the detected ride."""
+    acc_t0 = None
+    pressure_rows = []
+    with ride.path.open(encoding="utf-8") as handle:
+        for line in handle:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 5 and parts[1] == "ACC" and acc_t0 is None:
+                acc_t0 = float(parts[0])
+            elif len(parts) >= 3 and parts[1] == "PRS":
+                pressure_rows.append((float(parts[0]), float(parts[2])))
+    if acc_t0 is None or len(pressure_rows) < 2:
+        return [], None
+    start_ms = acc_t0 + 1000.0 * ride.t[ride.start]
+    stop_ms = acc_t0 + 1000.0 * ride.t[ride.stop]
+    selected = [(stamp, pressure) for stamp, pressure in pressure_rows if start_ms <= stamp <= stop_ms]
+    if len(selected) < 2:
+        return [], None
+    stamps = np.asarray([row[0] for row in selected])
+    pressure = np.asarray([row[1] for row in selected])
+    p0 = float(pressure[0])
+    relative_height = 44330.0 * (1.0 - np.power(pressure / p0, 0.1903))
+    seconds = (stamps - start_ms) / 1000.0
+    if len(seconds) > 360:
+        seconds, relative_height = map(np.asarray, downsample(seconds, relative_height))
+    points = [{"x": round(float(x), 3), "y": round(float(y), 4)} for x, y in zip(seconds, relative_height)]
+    metadata = {"sampleCount": len(selected), "startPressureHpa": round(p0, 3), "endPressureHpa": round(float(pressure[-1]), 3), "pressureChangeHpa": round(float(pressure[-1] - p0), 3), "relativeHeightChangeM": round(float(relative_height[-1]), 2)}
+    return points, metadata
 
 
 def event_profile(ride, phase):
@@ -111,10 +142,23 @@ def spatial_diagnostics(ride):
     }
 
 
-rides, _ = module.load_rides(ROOT / "Elevator" / "brf_no4fabrikoren" / "data260913", ROOT / "Elevator" / "runs.csv")
+data_dir = ROOT / "Elevator" / "brf_berzelii" / "data260919"
+floors = {"Bz": (4, -1), "Bg": (6, -1)}
+rides = []
+for i, path in enumerate(sorted(p for p in data_dir.iterdir() if p.is_file() and not p.name.startswith(".")), 1):
+    match = re.search(r"(Bz|Bg)$", path.name)
+    if not match:
+        continue
+    name = match.group(1)
+    t, acceleration = module.load_log(path)
+    vertical, lateral, start, stop, fs = module.detect(t, acceleration)
+    top, bottom = floors[name]
+    ride = module.Ride(i, path, name, top, bottom, t, vertical, lateral, start, stop, fs, module.metrics(t, vertical, lateral, start, stop, fs))
+    ride.metrics.update(module.ride_features(ride))
+    rides.append(ride)
 module.classify(rides)
 
-payload = {"date": "2026-09-13", "label": "Baslinjemätning", "elevators": []}
+payload = {"date": "2026-09-19", "label": "Baslinjemätning", "status": "complete", "measuredElevators": 2, "totalElevators": 2, "missingElevators": [], "hasBarometer": True, "elevators": []}
 for ride in rides:
     segment = ride.vertical[ride.start : ride.stop + 1]
     filtered = module.lowpass_zero_phase(segment, ride.fs, 1.0)
@@ -131,11 +175,13 @@ for ride in rides:
     spatial = spatial_diagnostics(ride)
     start_profile = event_profile(ride, "start")
     stop_profile = event_profile(ride, "stop")
+    barometer_height, barometer = barometer_diagnostics(ride)
     hx, hy = downsample(spatial["floor_position"][::-1], spatial["local_rms"][::-1])
     sx, sy = downsample(spatial["cycles_per_m"], spatial["spatial_amplitude"], 280)
     payload["elevators"].append(
         {
             "id": ride.name,
+            "recordedAt": f"{ride.path.name[4:8]}-{ride.path.name[8:10]}-{ride.path.name[10:12]}T{ride.path.name[13:15]}:{ride.path.name[15:17]}:{ride.path.name[17:19]}",
             "topFloor": ride.top,
             "bottomFloor": ride.bottom,
             "profile": [{"x": round(x, 3), "y": round(y, 5)} for x, y in zip(px, py)],
@@ -145,6 +191,8 @@ for ride in rides:
             "spectrum": [{"x": round(x, 4), "y": round(y, 6)} for x, y in zip(fx, fy)],
             "heightEnergy": [{"x": round(x, 3), "y": round(y, 6)} for x, y in zip(hx, hy)],
             "spatialSpectrum": [{"x": round(x, 4), "y": round(y, 6)} for x, y in zip(sx, sy)],
+            "barometerHeight": barometer_height,
+            "barometer": barometer,
             "metrics": {
                 "accelerationTime": round(ride.metrics["accel_phase_s"], 2),
                 "startImpulse": round(ride.metrics["start_impulse_ms2"], 3),
@@ -165,7 +213,7 @@ for ride in rides:
         }
     )
 
-out = Path(__file__).resolve().parents[1] / "public" / "data" / "no4fabrikoren"
+out = Path(__file__).resolve().parents[1] / "public" / "data" / "berzelii"
 out.mkdir(parents=True, exist_ok=True)
-(out / "2026-09-13.json").write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-print(out / "2026-09-13.json")
+(out / "2026-09-19.json").write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+print(out / "2026-09-19.json")

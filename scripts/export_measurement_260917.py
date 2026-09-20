@@ -142,7 +142,7 @@ def spatial_diagnostics(ride):
     }
 
 
-data_dir = ROOT / "Elevator" / "data260917"
+data_dir = ROOT / "Elevator" / "brf_no4fabrikoren" / "data260917"
 floors = {"10A": (8, 2), "10B": (6, 1), "10C": (7, 2), "10D": (8, 2), "10E": (6, 1), "6A": (7, 1), "4A": (8, 2), "4B": (6, 1), "4C": (7, 2), "4D": (8, 2), "4E": (6, 1)}
 rides = []
 for i, path in enumerate(sorted(p for p in data_dir.iterdir() if p.is_file() and not p.name.startswith(".")), 1):
@@ -213,8 +213,7 @@ for ride in rides:
         }
     )
 
-out = Path(__file__).resolve().parents[1] / "public" / "data"
+out = Path(__file__).resolve().parents[1] / "public" / "data" / "no4fabrikoren"
 out.mkdir(parents=True, exist_ok=True)
 (out / "2026-09-17.json").write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-(out / "index.json").write_text(json.dumps({"series": [{"date": "2026-09-17", "label": "Uppföljningsmätning 17–18 sep", "status": "complete", "measuredElevators": 11, "totalElevators": 11}, {"date": "2026-09-13", "label": "Baslinjemätning", "status": "complete", "measuredElevators": 11, "totalElevators": 11}]}, ensure_ascii=False))
 print(out / "2026-09-17.json")

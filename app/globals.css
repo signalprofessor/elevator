@@ -10,7 +10,7 @@ h1 { font-size:clamp(1.55rem,3vw,2.35rem); font-weight:720; letter-spacing:-.035
 h2 { font-size:1rem; font-weight:720; color:#153845; }
 .date-controls { display:flex; flex-wrap:wrap; align-items:end; gap:10px; }
 .date-controls label { display:grid; gap:4px; font-size:12px; color:#cfe6ee; }
-.date-controls input { min-height:38px; border:1px solid #477181; border-radius:8px; background:#f8fbfc; color:#183440; padding:6px 9px; font-size:14px; color-scheme:light; }
+.date-controls input,.date-controls select { min-height:38px; border:1px solid #477181; border-radius:8px; background:#f8fbfc; color:#183440; padding:6px 9px; font-size:14px; color-scheme:light; }
 .line-key { display:flex; align-items:center; gap:6px; padding-bottom:9px; color:#cfe6ee; font-size:12px; }
 .solid-line,.dashed-line { display:inline-block; width:22px; border-top:2px solid #65c6df; }
 .dashed-line { border-top-style:dashed; }

@@ -11,11 +11,18 @@ type Metrics = { accelerationTime: number; startImpulse: number; startJerk: numb
 type Barometer = { sampleCount: number; startPressureHpa: number; endPressureHpa: number; pressureChangeHpa: number; relativeHeightChangeM: number };
 type Elevator = { id: string; topFloor: number; bottomFloor: number; profile: Point[]; startProfile?: Point[]; stopProfile?: Point[]; velocity: Point[]; spectrum: Point[]; heightEnergy: Point[]; spatialSpectrum: Point[]; barometerHeight?: Point[]; barometer?: Barometer | null; metrics: Metrics };
 type Series = { date: string; label: string; status?: "complete" | "partial"; measuredElevators?: number; totalElevators?: number; missingElevators?: string[]; hasBarometer?: boolean; elevators: Elevator[] };
+type SeriesEntry = { date: string; label: string; status: "complete" | "partial"; measuredElevators: number; totalElevators: number };
+type Association = { id: string; name: string; defaultDate: string; series: SeriesEntry[] };
+type DataIndex = { version: number; associations: Association[] };
 
 const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
 const ELEVATOR_IDS = ["10A", "10B", "10C", "10D", "10E", "6A", "4A", "4B", "4C", "4D", "4E"];
-const DATA_VERSION = "20260919-3";
-const colorFor = (id: string) => COLORS[Math.max(0, ELEVATOR_IDS.indexOf(id)) % COLORS.length];
+const DATA_VERSION = "20260920-1";
+const colorFor = (id: string) => {
+  const known = ELEVATOR_IDS.indexOf(id);
+  const hash = [...id].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return COLORS[(known >= 0 ? known : hash) % COLORS.length];
+};
 const metricColumns: { key: keyof Metrics; label: string; digits: number }[] = [
   { key: "accelerationTime", label: "Acc.tid s", digits: 1 },
   { key: "startImpulse", label: "Startimpuls", digits: 2 },
@@ -188,6 +195,8 @@ function ElevatorAssessments({ current, history, elevators }: { current: Series;
 }
 
 export default function Home() {
+  const [associations, setAssociations] = useState<Association[]>([]);
+  const [associationId, setAssociationId] = useState("no4fabrikoren");
   const [current, setCurrent] = useState<Series | null>(null);
   const [history, setHistory] = useState<Series | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -195,14 +204,28 @@ export default function Home() {
   const [comparisonDate, setComparisonDate] = useState("2026-09-13");
   const [dateMessage, setDateMessage] = useState("");
 
-  useEffect(() => { fetch(`/data/${currentDate}.json?v=${DATA_VERSION}`).then((r) => { if (!r.ok) throw new Error("Mätserien saknas"); return r.json(); }).then((data: Series) => { setCurrent(data); setDateMessage(""); setSelected((old) => old.length ? old : data.elevators.map((e) => e.id)); }).catch(() => setDateMessage(`Ingen mätserie finns för ${currentDate}. Senaste giltiga serie visas.`)); }, [currentDate]);
+  useEffect(() => { fetch(`/data/index.json?v=${DATA_VERSION}`).then((response) => response.ok ? response.json() : Promise.reject()).then((data: DataIndex) => setAssociations(data.associations)).catch(() => setDateMessage("Kunde inte läsa listan över BRF:er.")); }, []);
+  useEffect(() => { if (!associationId || !currentDate) return; fetch(`/data/${associationId}/${currentDate}.json?v=${DATA_VERSION}`).then((r) => { if (!r.ok) throw new Error("Mätserien saknas"); return r.json(); }).then((data: Series) => { setCurrent(data); setDateMessage(""); setSelected((old) => { const available = data.elevators.map((elevator) => elevator.id); const retained = old.filter((id) => available.includes(id)); return retained.length ? retained : available; }); }).catch(() => setDateMessage(`Ingen mätserie finns för ${currentDate} i vald BRF.`)); }, [associationId, currentDate]);
   useEffect(() => {
-    if (!comparisonDate) {
+    if (!associationId || !comparisonDate) {
       Promise.resolve().then(() => setHistory(null));
       return;
     }
-    fetch(`/data/${comparisonDate}.json?v=${DATA_VERSION}`).then((r) => r.ok ? r.json() : Promise.reject()).then((data) => { setHistory(data); setDateMessage(""); }).catch(() => { setHistory(null); setDateMessage(`Ingen historisk mätserie finns för ${comparisonDate}.`); });
-  }, [comparisonDate]);
+    fetch(`/data/${associationId}/${comparisonDate}.json?v=${DATA_VERSION}`).then((r) => r.ok ? r.json() : Promise.reject()).then((data) => { setHistory(data); setDateMessage(""); }).catch(() => { setHistory(null); setDateMessage(`Ingen historisk mätserie finns för ${comparisonDate} i vald BRF.`); });
+  }, [associationId, comparisonDate]);
+
+  const activeAssociation = associations.find((association) => association.id === associationId);
+  const changeAssociation = (nextId: string) => {
+    const association = associations.find((item) => item.id === nextId);
+    if (!association) return;
+    setAssociationId(nextId);
+    setCurrent(null);
+    setHistory(null);
+    setSelected([]);
+    setDateMessage("");
+    setCurrentDate(association.defaultDate);
+    setComparisonDate(association.series.find((entry) => entry.date !== association.defaultDate)?.date ?? "");
+  };
 
   const visible = current?.elevators.filter((e) => selected.includes(e.id)) ?? [];
   const historical = history?.elevators.filter((e) => selected.includes(e.id)) ?? [];
@@ -217,15 +240,15 @@ export default function Home() {
 
   return <main className="min-h-screen bg-[#eef4f6] text-slate-950">
     <header className="border-b border-[#c8d7dd] bg-[#0c3444] text-white"><div className="mx-auto flex max-w-[1600px] flex-col gap-5 px-5 py-5 lg:flex-row lg:items-end lg:justify-between lg:px-8">
-      <div><div className="mb-2 flex items-center gap-2 text-sm text-cyan-100"><Activity size={17} /> BRF hissanalys</div><h1>Hissövervakning</h1><p className="mt-1 max-w-2xl text-sm text-slate-200">Jämför styrprofil och mekaniska vibrationssignaturer mellan hissar och mättillfällen.</p></div>
-      <div className="date-controls"><label><span>Aktuell mätning</span><input type="date" value={currentDate} onChange={(e) => setCurrentDate(e.target.value)} /></label><div className="line-key"><span className="solid-line" /> Heldragen</div><label><span>Historisk jämförelse</span><input type="date" value={comparisonDate} onChange={(e) => setComparisonDate(e.target.value)} /></label><div className="line-key"><span className="dashed-line" /> Streckad</div></div>
+      <div><div className="mb-2 flex items-center gap-2 text-sm text-cyan-100"><Activity size={17} /> BRF hissanalys</div><h1>Hissövervakning</h1><p className="mt-1 max-w-2xl text-sm text-slate-200">{activeAssociation?.name ?? "Välj bostadsrättsförening"} · jämför styrprofil och mekaniska vibrationssignaturer.</p></div>
+      <div className="date-controls"><label><span>BRF</span><select value={associationId} onChange={(event) => changeAssociation(event.target.value)}>{associations.map((association) => <option key={association.id} value={association.id}>{association.name}</option>)}</select></label><label><span>Aktuell mätning</span><input type="date" value={currentDate} onChange={(e) => setCurrentDate(e.target.value)} /></label><div className="line-key"><span className="solid-line" /> Heldragen</div><label><span>Historisk jämförelse</span><input type="date" value={comparisonDate} onChange={(e) => setComparisonDate(e.target.value)} /></label><div className="line-key"><span className="dashed-line" /> Streckad</div></div>
     </div></header>
 
     <div className="mx-auto max-w-[1600px] px-5 py-5 lg:px-8">
       <section className="selector-bar" aria-label="Välj hissar"><div className="flex flex-wrap items-center gap-2"><span className="mr-2 text-sm font-semibold text-slate-700">Visa hissar</span>
         {byId.map((elevator) => <div key={elevator.id} className={`elevator-toggle ${selected.includes(elevator.id) ? "selected" : ""}`}><Checkbox checked={selected.includes(elevator.id)} onCheckedChange={() => toggle(elevator.id)} aria-label={`Visa ${elevator.id}`} style={{ backgroundColor: selected.includes(elevator.id) ? colorFor(elevator.id) : undefined, borderColor: colorFor(elevator.id) }} /><button onClick={() => solo(elevator.id)} title={`Visa endast ${elevator.id}`}>{elevator.id}</button></div>)}
       </div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setSelected(byId.map((e) => e.id))}>Alla</Button><Button variant="outline" size="sm" onClick={() => setSelected([])}>Ingen</Button><Button variant="ghost" size="sm" onClick={() => { setComparisonDate(""); setSelected(byId.map((e) => e.id)); }}><RotateCcw /> Återställ</Button></div></section>
-      <div className="history-hint"><CalendarDays size={16} /><span>{current.status === "partial" && <>Partiell mätning: {current.measuredElevators || current.elevators.length} av {current.totalElevators || ELEVATOR_IDS.length} hissar. Saknas: {(current.missingElevators || []).join(", ")}. </>}{history ? history.date + " visas streckad som jämförelse." : dateMessage || "Ingen historisk jämförelse vald."}</span></div>
+      <div className="history-hint"><CalendarDays size={16} /><span>{current.status === "partial" && <>Partiell mätning: {current.measuredElevators || current.elevators.length} av {current.totalElevators || current.elevators.length} hissar. Saknas: {(current.missingElevators || []).join(", ")}. </>}{history ? history.date + " visas streckad som jämförelse." : dateMessage || "Ingen historisk jämförelse vald."}</span></div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Plot title="Tidsnormaliserad acceleration" note="Profilernas form visar skillnader i acceleration och jerk. Heldragen kurva är aktuell mätning; streckad är baslinjen." elevators={visible} historical={historical} field="profile" xLabel="andel av färd %" yLabel="m/s²" />
@@ -233,9 +256,9 @@ export default function Home() {
         <Plot title="Startförlopp" note="Acceleration lågpassfiltrerad vid 5 Hz, lokalt nollställd och justerad så att detekterad start ligger vid 0 s. Korta toppar kan motsvara ett upplevt tillhopp." elevators={visible} historical={historical} field="startProfile" xLabel="sekunder från start" yLabel="m/s²" />
         <Plot title="Stoppförlopp" note="Detekterad bromsstart ligger vid 0 s; hela inbromsningen och återgången mot noll visas. En mjuk kurva är jämnare än flera snabba riktningsbyten eller en kort topp." elevators={visible} historical={historical} field="stopProfile" xLabel="sekunder från inbromsning" yLabel="m/s²" />
         <Plot title="Glättat vibrationsspektrum" note={`Starkast periodiska signaturer: ${strongest.map((e) => `${e.id} ${e.metrics.dominantFrequency.toFixed(1)} Hz`).join(", ")}.`} elevators={visible} historical={historical} field="spectrum" xLabel="Hz" yLabel="amplitud m/s²" />
-        <Plot title="Rumsligt vibrationsspektrum" note="Flera hissar grupperar sig kring 5,6 cykler/m, vilket kan vara en gemensam mekanisk signatur. 10A avviker kring 8,1 cykler/m och har ett planerat hjulbyte." elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
+        <Plot title="Rumsligt vibrationsspektrum" note="Återkommande toppar i cykler/m kan tyda på en mekanisk signatur som följer färdsträckan. Jämför i första hand hissar inom vald BRF." elevators={visible} historical={historical} field="spatialSpectrum" xLabel="cykler/m" yLabel="amplitud m/s²" />
         <Plot title="Vibrationsenergi mot våningsläge" note="En lokal topp blir diagnostisk först om den återkommer vid samma läge i flera resor." elevators={visible} historical={historical} field="heightEnergy" xLabel="skattat våningsläge" yLabel="RMS m/s²" />
-        <Plot title="Barometrisk höjdförändring" note="Ny försökskanal i mätningen 17 september. Relativ höjd är nollställd vid resans början; negativ riktning motsvarar färd nedåt." elevators={visible} historical={historical} field="barometerHeight" xLabel="sekunder" yLabel="relativ höjd m" />
+        <Plot title="Barometrisk höjdförändring" note="Relativ höjd från barometern, nollställd vid resans början. Negativ riktning motsvarar färd nedåt; absolutnivån påverkas av tryck och ventilation." elevators={visible} historical={historical} field="barometerHeight" xLabel="sekunder" yLabel="relativ höjd m" />
       </div>
 
       <section className="mt-5 grid items-start gap-5 xl:grid-cols-2">
