@@ -17,7 +17,7 @@ type DataIndex = { version: number; associations: Association[] };
 
 const COLORS = ["#0b5d80", "#e06b34", "#24805d", "#9446a0", "#d13f5b", "#697386", "#b47716", "#008e8d", "#5865cf", "#825b41", "#28384f"];
 const ELEVATOR_IDS = ["10A", "10B", "10C", "10D", "10E", "6A", "4A", "4B", "4C", "4D", "4E"];
-const DATA_VERSION = "20261010-1";
+const DATA_VERSION = "20261019-1";
 const colorFor = (id: string) => {
   const known = ELEVATOR_IDS.indexOf(id);
   const hash = [...id].reduce((sum, character) => sum + character.charCodeAt(0), 0);
@@ -200,7 +200,7 @@ export default function Home() {
   const [current, setCurrent] = useState<Series | null>(null);
   const [history, setHistory] = useState<Series | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
-  const [currentDate, setCurrentDate] = useState("2026-10-10");
+  const [currentDate, setCurrentDate] = useState("2026-10-19");
   const [comparisonDate, setComparisonDate] = useState("2026-09-24");
   const [dateMessage, setDateMessage] = useState("");
 
